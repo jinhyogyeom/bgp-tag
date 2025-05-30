@@ -1,0 +1,5 @@
+pymilvus==2.3.4
+sentence-transformers==2.2.2
+numpy>=1.21.0
+torch>=2.0.0
+transformers>=4.30.0 
