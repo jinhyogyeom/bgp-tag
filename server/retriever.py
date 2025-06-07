@@ -21,7 +21,7 @@ def get_retriever(embedding_model: str, k: int, target_date: str):
     return vectorstore.as_retriever(search_kwargs={"k": k})
 
 
-def get_chain(retriever, llm_model: str):
+def get_chain(retriever, llm_model: str, start_datetime: str, end_datetime: str):
     prompt = ChatPromptTemplate.from_template(
         """
         You are a network analysis assistant specialized in BGP anomaly detection.
@@ -32,11 +32,17 @@ def get_chain(retriever, llm_model: str):
         Always respond **in Korean**, and do not invent or assume any information not explicitly included in the documents.
         Use only the facts found in the context, and explain clearly and professionally.
 
+        Here is the information you have:
+        "A
+
         User Query:
         "{query}"
 
         Reference Documents:
         {context}
+
+        Start Date and Time: {start_datetime}
+        End Date and Time: {end_datetime}
 
         Answer the question in Korean.
         If multiple anomalies are involved (e.g., hijack, flap, loop, MOAS), summarize each clearly, including:
@@ -50,18 +56,19 @@ def get_chain(retriever, llm_model: str):
     )
 
     if llm_model.startswith("gpt-"):
-        llm = ChatOpenAI(
-            model=llm_model,
-            temperature=0.3,
-            openai_api_key="",
-        )
+        llm = ChatOpenAI(model=llm_model, temperature=0.3, openai_api_key="")
     else:
         llm = ChatOllama(model=llm_model, base_url="http://host.docker.internal:11434")
 
     output_parser = StrOutputParser()
 
     chain = (
-        {"context": retriever, "query": RunnablePassthrough()}
+        {
+            "context": retriever,
+            "query": RunnablePassthrough(),
+            "start_datetime": lambda x: start_datetime,
+            "end_datetime": lambda x: end_datetime,
+        }
         | prompt
         | llm
         | output_parser
@@ -70,8 +77,19 @@ def get_chain(retriever, llm_model: str):
 
 
 def rag_chain(
-    query: str, embedding_model: str, llm_model: str, k: int, target_date: str
+    query: str,
+    embedding_model: str,
+    llm_model: str,
+    k: int,
+    target_date: str,
+    start_datetime: str,
+    end_datetime: str,
 ):
     retriever = get_retriever(embedding_model, k, target_date)
-    chain = get_chain(retriever=retriever, llm_model=llm_model)
+    chain = get_chain(
+        retriever=retriever,
+        llm_model=llm_model,
+        start_datetime=start_datetime,
+        end_datetime=end_datetime,
+    )
     return chain.invoke(query)

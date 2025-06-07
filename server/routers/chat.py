@@ -8,6 +8,7 @@ from models.chat_room import (
     ChatRoom,
     ChatRoomListItem,
     get_all_chat_rooms,
+    update_chat_room_history,
 )
 
 from datetime import datetime, timedelta
@@ -24,10 +25,10 @@ class ChatRequest(BaseModel):
 
 
 class NewChatRequest(BaseModel):
-    entity: str
-    entity_type: str
-    start_datetime: str = None
-    end_datetime: str = None
+    entity: str = None
+    entity_type: str = None
+    start_datetime: str
+    end_datetime: str
 
 
 class ChatResponse(BaseModel):
@@ -38,10 +39,6 @@ class NewChatResponse(BaseModel):
     room_id: str
 
 
-# OLLAMA_URL = "http://host.docker.internal:11434/api/chat"
-# OLLAMA_MODEL = "gemma3:12b"
-
-
 @router.get("/chatrooms", response_model=list[ChatRoomListItem])
 async def get_chat_rooms():
     return get_all_chat_rooms()
@@ -49,18 +46,14 @@ async def get_chat_rooms():
 
 @router.post("/chatrooms", response_model=NewChatResponse)
 async def create_new_chat(req: NewChatRequest):
-    yesterday = datetime.now() - timedelta(days=1)
-
-    start_datetime = (
-        datetime.fromisoformat(req.start_datetime)
-        if req.start_datetime
-        else yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
-    )
-    end_datetime = (
-        datetime.fromisoformat(req.end_datetime)
-        if req.end_datetime
-        else yesterday.replace(hour=0, minute=59, second=59, microsecond=0)
-    )
+    try:
+        start_datetime = datetime.strptime(req.start_datetime, "%Y-%m-%dT%H:%M")
+        end_datetime = datetime.strptime(req.end_datetime, "%Y-%m-%dT%H:%M")
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid datetime format. Expected format: YYYY-MM-DDThh:mm",
+        )
 
     if start_datetime.date() != end_datetime.date():
         raise HTTPException(
@@ -70,8 +63,14 @@ async def create_new_chat(req: NewChatRequest):
     room = create_chat_room(
         req.entity,
         req.entity_type,
-        start_datetime="20250525T000000Z",
-        end_datetime="20250525T005959Z",
+        start_datetime=req.start_datetime,
+        end_datetime=req.end_datetime,
+    )
+
+    update_chat_room_history(
+        role="assistant",
+        room_id=room.id,
+        message=f"{req.start_datetime}부터 {req.end_datetime}까지의 데이터가 적재되었습니다.",
     )
 
     return NewChatResponse(room_id=room.id)
@@ -88,15 +87,35 @@ async def get_chat_room_details(room_id: str):
 
 @router.post("/chats", response_model=ChatResponse)
 async def chat_with_bot(req: ChatRequest):
+    room_id = req.room_id
+    if room_id not in [room.id for room in get_all_chat_rooms()]:
+        raise HTTPException(status_code=404, detail="Chat room not found")
+
+    chatroom = get_chat_room(room_id)
+
     try:
         result = rag_chain(
             query=req.message,
             embedding_model="all-MiniLM-L6-v2",
-            # llm_model="llama3:8b",
+            # llm_model="gemma3:1b",
             llm_model="gpt-4o-mini",
             k=100,
             target_date="20250525",
+            start_datetime=chatroom.start_datetime,
+            end_datetime=chatroom.end_datetime,
         )
+
+        update_chat_room_history(
+            role="user",
+            room_id=room_id,
+            message=req.message,
+        )
+        update_chat_room_history(
+            role="assistant",
+            room_id=room_id,
+            message=result,
+        )
+
         return {"response": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

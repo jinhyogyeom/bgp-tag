@@ -55,3 +55,15 @@ def get_all_chat_rooms() -> List[ChatRoomListItem]:
         )
         for room in chat_rooms.values()
     ]
+
+
+def update_chat_room_history(role: str, room_id: str, message: dict) -> None:
+    if room_id in chat_rooms:
+        chat_rooms[room_id].history.append(
+            {
+                "role": role,
+                "message": message,
+            }
+        )
+    else:
+        raise ValueError(f"Chat room with id {room_id} does not exist.")
