@@ -56,9 +56,13 @@ def get_chain(retriever, llm_model: str, start_datetime: str, end_datetime: str)
     )
 
     if llm_model.startswith("gpt-"):
-        llm = ChatOpenAI(model=llm_model, temperature=0.3, openai_api_key="")
+        llm = ChatOpenAI(
+            model=llm_model,
+            temperature=0.3,
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+        )
     else:
-        llm = ChatOllama(model=llm_model, base_url="http://host.docker.internal:11434")
+        llm = ChatOllama(model=llm_model, base_url=os.getenv("OLLAMA_BASE_URL"))
 
     output_parser = StrOutputParser()
 
