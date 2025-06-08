@@ -9,12 +9,7 @@ from models.chat_room import (
     get_all_chat_rooms,
     update_chat_room_history,
 )
-from models.chat import (
-    ChatRequest,
-    NewChatRequest,
-    ChatResponse,
-    NewChatResponse,
-)
+from models.chat import ChatRequest, NewChatRequest, ChatResponse, NewChatResponse, chat
 
 from datetime import datetime
 
@@ -65,27 +60,24 @@ async def chat_with_bot(req: ChatRequest):
     chatroom = get_chat_room(room_id)
 
     try:
-        result = rag_chain(
+        result = chat(
             query=req.message,
-            embedding_model="all-MiniLM-L6-v2",
-            llm_model=os.getenv("LLM_MODEL"),
-            k=100,
             target_date="20250525",
             start_datetime=chatroom.start_datetime,
             end_datetime=chatroom.end_datetime,
         )
-
-        update_chat_room_history(
-            role="user",
-            room_id=room_id,
-            message=req.message,
-        )
-        update_chat_room_history(
-            role="assistant",
-            room_id=room_id,
-            message=result,
-        )
-
-        return {"response": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+    update_chat_room_history(
+        role="user",
+        room_id=room_id,
+        message=req.message,
+    )
+    update_chat_room_history(
+        role="assistant",
+        room_id=room_id,
+        message=result,
+    )
+
+    return {"response": result}
