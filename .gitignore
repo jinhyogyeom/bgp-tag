@@ -14,3 +14,6 @@ backup/
 
 # env
 .env
+
+# data volumes
+volumes/
