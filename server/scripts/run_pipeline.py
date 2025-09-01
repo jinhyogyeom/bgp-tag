@@ -45,23 +45,7 @@ def run_analysis_scripts(start_time: str, end_time: str):
         print(f"✅ Completed: {script}")
 
 
-def run_report_scripts(start_time: str, end_time: str):
-    scripts = [
-        f"python {BASE_PATH}/scenarios/flap/flap_report.py --output_file {BASE_PATH}/flap_10min_nl_reports.jsonl",
-        f"python {BASE_PATH}/scenarios/hijack/hijack_report.py --output_file {BASE_PATH}/hijack_10min_nl_reports.jsonl",
-        f"python {BASE_PATH}/scenarios/loop/loop_report.py --output_file {BASE_PATH}/loop_10min_nl_reports.jsonl",
-        f"python {BASE_PATH}/scenarios/moas/moas_report.py --output_file {BASE_PATH}/moas_10min_nl_reports.jsonl",
-    ]
 
-    print("\nGenerating Reports:")
-    for script in tqdm(scripts, desc="Report Generation", unit="report"):
-        print(f"\nGenerating: {script}")
-        cmd = f"{script} --start_time {start_time} --end_time {end_time}"
-        result = subprocess.run(cmd, shell=True)
-        if result.returncode != 0:
-            print(f"❌ Error generating {script}")
-            sys.exit(1)
-        print(f"✅ Completed: {script}")
 
 
 def run_milvus_embedding():
@@ -86,7 +70,7 @@ def print_pipeline_status(
 
 
 def main(start_time: datetime, end_time: datetime):
-    total_steps = 3
+    total_steps = 2
 
     set_env(start_time)
 
@@ -97,13 +81,9 @@ def main(start_time: datetime, end_time: datetime):
     run_analysis_scripts(start_time.isoformat(), end_time.isoformat())
     print_pipeline_status(start_time, end_time, 1, total_steps)
 
-    print_step_header("Report Generation", total_steps, 2)
-    run_report_scripts(start_time.isoformat(), end_time.isoformat())
-    print_pipeline_status(start_time, end_time, 2, total_steps)
-
-    print_step_header("Milvus Embedding", total_steps, 3)
+    print_step_header("Milvus Embedding", total_steps, 2)
     run_milvus_embedding()
-    print_pipeline_status(start_time, end_time, 3, total_steps)
+    print_pipeline_status(start_time, end_time, 2, total_steps)
 
     print(f"\n✅ Pipeline completed successfully.")
 
