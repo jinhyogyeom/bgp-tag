@@ -6,8 +6,7 @@ from jinja2 import Template
 import gc
 from sqlalchemy import create_engine
 import os
-import dotenv
-dotenv.load_dotenv()
+
 TIMESCALE_URI = os.getenv('TIMESCALE_URI')
 
 # flap settings

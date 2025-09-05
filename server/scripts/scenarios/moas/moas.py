@@ -9,8 +9,7 @@ import psycopg2
 from psycopg2.extras import execute_values
 from sqlalchemy import create_engine
 import os
-import dotenv
-dotenv.load_dotenv()
+
 # PostgreSQL connection
 TIMESCALE_URI = os.getenv('TIMESCALE_URI')
 
