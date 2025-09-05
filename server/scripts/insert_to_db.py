@@ -4,7 +4,7 @@ import psycopg2
 from psycopg2.extras import execute_values
 import mrtparse
 
-POSTGRES_URI = "postgresql://bgp:bgp@bgpdb:5432/bgpdb"
+POSTGRES_URI = "postgresql://postgres:postgres@timescaledb:5432/bgp_timeseries"
 
 
 def check_table_exists(target_date):

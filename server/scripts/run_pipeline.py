@@ -5,20 +5,18 @@ import sys
 import os
 from insert_to_db import check_table_exists, download_data
 
-BASE_PATH = "scripts"
 
 # env 설정
 def set_env(start_time: datetime):
     os.environ["TARGET_DATE"] = start_time.strftime("%Y%m%d")
-    os.environ["BASE_PATH"] = BASE_PATH
     os.environ["TIMESCALE_URI"] = "postgresql://bgp:bgp@bgpdb:5432/bgpdb"
 
 def run_analysis_scripts(start_time: str, end_time: str):
     scripts = [
-        f"python {BASE_PATH}/scenarios/flap/flap.py",
-        f"python {BASE_PATH}/scenarios/hijack/hijack.py",
-        f"python {BASE_PATH}/scenarios/loop/loop.py",
-        f"python {BASE_PATH}/scenarios/moas/moas.py",
+        f"python scenarios/flap/flap.py",
+        f"python scenarios/hijack/hijack.py",
+        f"python scenarios/loop/loop.py",
+        f"python scenarios/moas/moas.py",
     ]
 
     for script in scripts:
