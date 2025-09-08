@@ -1,189 +1,154 @@
 #!/usr/bin/env python3
 import argparse
-import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta
 import pandas as pd
-from jinja2 import Template
-import gc
 import psycopg2
 from psycopg2.extras import execute_values
 from sqlalchemy import create_engine
 import os
 
-# PostgreSQL connection
+# ===== 원본/출력 =====
+TABLE_PREFIX = "update_entries_"
+OUT_TABLE    = "loop_analysis_results"
 TIMESCALE_URI = os.getenv('TIMESCALE_URI')
 
-def parse_arguments():
-    parser = argparse.ArgumentParser(description="BGP Loop Analysis Summarization by Prefix for RAG")
-    parser.add_argument("--start_time",  type=str, required=True,
-                        help="start time (ISO format, e.g. '2021-10-25T00:00:00')")
-    parser.add_argument("--end_time",    type=str, required=True,
-                        help="end time   (ISO format, e.g. '2021-10-25T07:00:00')")
-    return parser.parse_args()
+def parse_args():
+    p = argparse.ArgumentParser(description="BGP Loop detector (no buckets, per-update, non-consecutive repeats)")
+    p.add_argument("--start_time", type=str, required=True, help="ISO8601 e.g. 2025-05-25T00:00:00Z")
+    p.add_argument("--end_time",   type=str, required=True, help="ISO8601 e.g. 2025-05-25T07:00:00Z")
+    return p.parse_args()
 
-def get_db_connection():
-    try:
-        return psycopg2.connect(TIMESCALE_URI)
-    except psycopg2.Error as e:
-        print(f"Database connection error: {e}")
-        raise
+def day_range(start_dt, end_dt):
+    d = start_dt.date()
+    while d <= end_dt.date():
+        yield d
+        d += timedelta(days=1)
 
-def fetch_bgp_updates(start_time: str, end_time: str) -> pd.DataFrame:
+def load_announces(start_dt, end_dt) -> pd.DataFrame:
     """
-    PostgreSQL에서 BGP 업데이트 데이터를 조회하여 루프 분석에 필요한 형태로 변환
+    기간 내 ANNOUNCE만 로드 → (timestamp, prefix, peer_as, as_path) 정규화
     """
-    target_date = pd.to_datetime(start_time).strftime('%Y%m%d')
-    
-    query = f"""
-    SELECT 
-        entry_id,
-        timestamp,
-        peer_as,
-        as_path,
-        announce_prefixes,
-        withdraw_prefixes
-    FROM update_entries_{target_date}
-    WHERE timestamp BETWEEN %s AND %s
-    ORDER BY timestamp ASC
-    """
-    
-    # SQLAlchemy 엔진 생성
     engine = create_engine(TIMESCALE_URI)
-    
-    # SQLAlchemy를 사용하여 데이터 조회
-    df = pd.read_sql_query(
-        query,
-        engine,
-        params=(start_time, end_time),
-        parse_dates=['timestamp']
-    )
-    
-    # announce와 withdraw를 분리하여 처리
-    announces = df[df['announce_prefixes'].notna()].explode('announce_prefixes')
-    withdraws = df[df['withdraw_prefixes'].notna()].explode('withdraw_prefixes')
-    
-    # 상태 정보 추가
-    announces['state'] = 'announce'
-    withdraws['state'] = 'withdraw'
-    
-    # 컬럼명 통일
-    announces = announces.rename(columns={'announce_prefixes': 'prefix'})
-    withdraws = withdraws.rename(columns={'withdraw_prefixes': 'prefix'})
-    
-    # 데이터 통합
-    combined = pd.concat([
-        announces[['entry_id', 'timestamp', 'peer_as', 'as_path', 'prefix', 'state']],
-        withdraws[['entry_id', 'timestamp', 'peer_as', 'as_path', 'prefix', 'state']]
-    ])
-    
-    return combined.sort_values('timestamp')
+    frames = []
+    for d in day_range(start_dt, end_dt):
+        tbl = f"{TABLE_PREFIX}{d.strftime('%Y%m%d')}"
+        q = f"""
+        SELECT timestamp, peer_as, as_path, announce_prefixes
+        FROM {tbl}
+        WHERE timestamp >= %s AND timestamp < %s
+          AND announce_prefixes IS NOT NULL
+        ORDER BY timestamp ASC
+        """
+        try:
+            df = pd.read_sql_query(q, engine, params=(start_dt, end_dt), parse_dates=['timestamp'])
+        except Exception:
+            continue
+        if df.empty:
+            continue
+        a = df.explode('announce_prefixes').rename(columns={'announce_prefixes':'prefix'})
+        # as_path를 list[int]로 정규화
+        def norm_path(x):
+            if isinstance(x, list):
+                return [int(v) for v in x]
+            if x is None:
+                return []
+            try:
+                return [int(v) for v in list(x)]
+            except Exception:
+                return []
+        a['as_path'] = a['as_path'].apply(norm_path)
+        frames.append(a[['timestamp','peer_as','as_path','prefix']])
 
-def has_as_loop(as_path):
-    """
-    AS 경로에 루프가 있는지 확인
-    """
-    if not as_path or not isinstance(as_path, list):
-        return False
-    
-    # AS 경로에서 중복된 AS 번호가 있는지 확인
-    return len(as_path) != len(set(as_path))
+    if not frames:
+        return pd.DataFrame(columns=['timestamp','peer_as','as_path','prefix'])
 
-def analyze_loop_anomalies(df):
-    """
-    루프 이상 현상 분석
-    """
-    summaries = []
-    for prefix, group in df.groupby('prefix', sort=False):
-        # AS 루프가 있는 경로 찾기
-        loop_paths = group[group['as_path'].apply(has_as_loop)]
-        
-        if not loop_paths.empty:
-            first = group['timestamp'].min()
-            last = group['timestamp'].max()
-            summaries.append({
-                "prefix": prefix,
-                "as_path": [str(asn) for asn in loop_paths['as_path'].iloc[0]],  # TEXT[] 타입으로 변환
-                "total_events": int(group.shape[0]),
-                "first_update": first.isoformat(),
-                "last_update": last.isoformat(),
-                "summary": generate_summary(prefix, group.shape[0], first, last, loop_paths['as_path'].iloc[0]),
-                "analyzed_at": datetime.now(timezone.utc).isoformat()
+    out = pd.concat(frames, ignore_index=True)
+    out['timestamp'] = pd.to_datetime(out['timestamp'], utc=True)
+    return out.sort_values('timestamp')
 
-            })
-    return summaries
-
-def generate_summary(prefix, total, first, last, as_path):
-    tpl = Template("""
-[{{ time_range }} BGP Updates – Prefix: {{ prefix }}]
-- Total updates: {{ total }}
-- Update time range: {{ first }} ~ {{ last }}
-- AS Path with loop: {{ as_path|join(' ') }}
-⚠️ BGP Loop detected! AS path contains repeated AS numbers.
-""".strip())
-    tr = f"{first.strftime('%Y-%m-%d %H:%M:%S')} ~ {last.strftime('%Y-%m-%d %H:%M:%S')}"
-    return tpl.render(time_range=tr,
-                      prefix=prefix,
-                      total=total,
-                      first=first.strftime('%Y-%m-%d %H:%M:%S'),
-                      last=last.strftime('%Y-%m-%d %H:%M:%S'),
-                      as_path=as_path)
-
-def save_to_timescale(conn, summaries):
+def find_nonconsecutive_repeat(as_path):
     """
-    분석 결과를 TimescaleDB에 저장
+    비연속 반복(A ... B ... A) 발견 시 반복 ASN과 위치를 반환.
+    연속 반복(AS prepending)은 정상으로 간주하고 무시.
+    반환: None 또는 {"asn": ASN, "i": first_idx, "j": second_idx}
     """
-    if not summaries:
-        return
-    
-    cursor = conn.cursor()
-    try:
-        data = [(
-            datetime.fromisoformat(s['first_update']),
-            s['prefix'],
-            s['as_path'],  # 이미 TEXT[] 타입으로 변환됨
-            s['total_events'],
-            datetime.fromisoformat(s['first_update']),
-            datetime.fromisoformat(s['last_update']),
-            s['summary'],
-            datetime.fromisoformat(s['analyzed_at'])
-        ) for s in summaries]
-        
-        execute_values(cursor, """
-            INSERT INTO loop_analysis_results 
-            (time, prefix, as_path, total_events, first_update, 
-             last_update, summary, analyzed_at)
-            VALUES %s
-        """, data)
-        
-        conn.commit()
-        print(f"✅ Inserted {len(summaries)} records to TimescaleDB")
-        
-    except Exception as e:
-        conn.rollback()
-        print(f"❌ Failed to insert to TimescaleDB: {e}")
-    finally:
-        cursor.close()
+    if not as_path or len(as_path) < 3:
+        return None
+    last_pos = {}
+    for idx, asn in enumerate(as_path):
+        try:
+            asn = int(asn)
+        except Exception:
+            return None
+        if asn in last_pos and idx - last_pos[asn] > 1:
+            return {"asn": asn, "i": last_pos[asn], "j": idx}
+        last_pos[asn] = idx
+    return None
+
+def detect_loops(df: pd.DataFrame):
+    """
+    버킷팅 없이, 각 ANNOUNCE 레코드 단위로 비연속 반복이 있으면 곧장 수집.
+    """
+    if df.empty:
+        return []
+
+    rows = []
+    now = datetime.now()
+    for row in df.itertuples(index=False):
+        path = row.as_path if isinstance(row.as_path, list) else []
+        info = find_nonconsecutive_repeat(path)
+        if not info:
+            continue
+
+        path_str = " ".join(map(str, path))
+        summary = (
+            f"[{row.timestamp:%Y-%m-%d %H:%M:%S}] BGP loop for {row.prefix} | "
+            f"peer_as={int(row.peer_as)} | repeat_as={info['asn']} "
+            f"(pos {info['i']}→{info['j']}) | as_path=[{path_str}]"
+        )
+
+        rows.append((
+            row.timestamp,               # time
+            str(row.prefix),             # prefix
+            int(row.peer_as),            # peer_as
+            int(info['asn']),            # repeat_as
+            int(info['i']),              # first_idx
+            int(info['j']),              # second_idx
+            path,                        # as_path :: int[]
+            int(len(path)),              # path_len
+            summary,                     # summary
+            now                          # analyzed_at
+        ))
+    return rows
+
+def save_rows(rows):
+    if not rows:
+        print("no LOOP events to save"); return
+    conn = psycopg2.connect(TIMESCALE_URI)
+    cur = conn.cursor()
+    sql = f"""
+    INSERT INTO {OUT_TABLE}
+    (time, prefix, peer_as, repeat_as, first_idx, second_idx, as_path, path_len, summary, analyzed_at)
+    VALUES %s
+    ON CONFLICT (time, prefix, peer_as, repeat_as, first_idx, second_idx) DO NOTHING
+    """
+    execute_values(cur, sql, rows)
+    conn.commit()
+    cur.close()
+    conn.close()
+    print(f"saved {len(rows)} LOOP events")
 
 def main():
-    args = parse_arguments()
-    
-    try:
-        # BGP 업데이트 데이터 조회
-        df = fetch_bgp_updates(args.start_time, args.end_time)
-        if df.empty:
-            print("No BGP updates found in the specified time range")
-            return
-            
-        # 루프 분석 수행
-        summaries = analyze_loop_anomalies(df)
-        
-        # TimescaleDB에 결과 저장
-        with get_db_connection() as conn:
-            save_to_timescale(conn, summaries)
-            
-    except Exception as e:
-        print(f"Error: {e}")
-        raise
+    args = parse_args()
+    start_dt = pd.to_datetime(args.start_time, utc=True)
+    end_dt   = pd.to_datetime(args.end_time,   utc=True)
+
+    df = load_announces(start_dt, end_dt)
+    if df.empty:
+        print("no announces in given range"); return
+
+    rows = detect_loops(df)
+    save_rows(rows)
 
 if __name__ == "__main__":
     main()
