@@ -30,7 +30,7 @@ def download_data(target_date):
         file_base = f"./routeviews_data/updates.{target_date}.{hour_str}{minute}"
         bz2_file = f"{file_base}.bz2"
         url = f"https://routeviews.org/bgpdata/{target_date[:4]}.{target_date[4:6]}/UPDATES/updates.{target_date}.{hour_str}{minute}.bz2"
-
+        print(url)
         try:
             os.system(f"curl -o {bz2_file} {url}")
             os.system(f"bzip2 -d {bz2_file}")
