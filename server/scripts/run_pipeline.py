@@ -25,10 +25,11 @@ def drop_table_if_exists(target_date: str):
 
 def run_analysis_scripts(start_time: str, end_time: str):
     scripts = [
+        ("loop", f"python scenarios/loop/loop.py"),
         ("flap",   f"python scenarios/flap/flap.py"),
-        ("hijack", f"python scenarios/hijack/hijack.py"),
-        ("loop",   f"python scenarios/loop/loop.py"),
-        ("moas",   f"python scenarios/moas/moas.py"),
+        ("subprefix_hijack", f"python scenarios/hijack/subprefix_hijack.py"),
+        ("origin_hijack", f"python scenarios/hijack/origin_hijack.py"),
+        ("moas", f"python scenarios/hijack/moas.py"),
     ]
 
     total_started_at = datetime.now()

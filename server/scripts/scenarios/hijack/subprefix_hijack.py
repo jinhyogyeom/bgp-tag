@@ -165,13 +165,35 @@ def main():
     start_dt = pd.to_datetime(args.start_time, utc=True)
     end_dt   = pd.to_datetime(args.end_time,   utc=True)
 
-    df = load_announces(start_dt, end_dt)
-    if df.empty:
-        print("no announces in given range")
-        return
+    # 시간 범위를 6시간씩 분할하여 처리
+    all_events = []
+    current_time = start_dt
+    
+    while current_time < end_dt:
+        chunk_end = min(current_time + pd.Timedelta(hours=6), end_dt)
+        print(f"Processing chunk: {current_time} to {chunk_end}")
+        
+        df = load_announces(current_time, chunk_end)
+        if df.empty:
+            print("No announces in this chunk")
+            current_time = chunk_end
+            continue
 
-    events = detect_subprefix_hijack(df)
-    save_events(events)
+        events = detect_subprefix_hijack(df)
+        if events:
+            all_events.extend(events)
+            print(f"Found {len(events)} subprefix hijack events in this chunk")
+        else:
+            print("No subprefix hijack events in this chunk")
+        
+        current_time = chunk_end
+
+    # 모든 결과를 한번에 저장
+    if all_events:
+        print(f"Saving {len(all_events)} total subprefix hijack events...")
+        save_events(all_events)
+    else:
+        print("No subprefix hijack events to save")
 
 if __name__ == "__main__":
     main()

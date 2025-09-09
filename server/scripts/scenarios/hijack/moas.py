@@ -181,12 +181,38 @@ def save_events(rows):
 # ---------- main ----------
 def main():
     args = parse_args()
-    df = load_announces(args.start_time, args.end_time)
-    if df.empty:
-        print("no announces in given range")
-        return
-    events = detect_moas_bucket_only(df)
-    save_events(events)
+    start_dt = pd.to_datetime(args.start_time, utc=True)
+    end_dt   = pd.to_datetime(args.end_time,   utc=True)
+
+    # 시간 범위를 6시간씩 분할하여 처리
+    all_events = []
+    current_time = start_dt
+    
+    while current_time < end_dt:
+        chunk_end = min(current_time + pd.Timedelta(hours=6), end_dt)
+        print(f"Processing chunk: {current_time} to {chunk_end}")
+        
+        df = load_announces(current_time.isoformat(), chunk_end.isoformat())
+        if df.empty:
+            print("No announces in this chunk")
+            current_time = chunk_end
+            continue
+
+        events = detect_moas_bucket_only(df)
+        if events:
+            all_events.extend(events)
+            print(f"Found {len(events)} MOAS events in this chunk")
+        else:
+            print("No MOAS events in this chunk")
+        
+        current_time = chunk_end
+
+    # 모든 결과를 한번에 저장
+    if all_events:
+        print(f"Saving {len(all_events)} total MOAS events...")
+        save_events(all_events)
+    else:
+        print("No MOAS events to save")
 
 if __name__ == "__main__":
     main()

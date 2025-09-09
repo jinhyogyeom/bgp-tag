@@ -143,12 +143,35 @@ def main():
     start_dt = pd.to_datetime(args.start_time, utc=True)
     end_dt   = pd.to_datetime(args.end_time,   utc=True)
 
-    df = load_announces(start_dt, end_dt)
-    if df.empty:
-        print("no announces in given range"); return
+    # 시간 범위를 6시간씩 분할하여 처리
+    all_rows = []
+    current_time = start_dt
+    
+    while current_time < end_dt:
+        chunk_end = min(current_time + pd.Timedelta(hours=6), end_dt)
+        print(f"Processing chunk: {current_time} to {chunk_end}")
+        
+        df = load_announces(current_time, chunk_end)
+        if df.empty:
+            print("No announces in this chunk")
+            current_time = chunk_end
+            continue
 
-    rows = detect_loops(df)
-    save_rows(rows)
+        rows = detect_loops(df)
+        if rows:
+            all_rows.extend(rows)
+            print(f"Found {len(rows)} loop events in this chunk")
+        else:
+            print("No loop events in this chunk")
+        
+        current_time = chunk_end
+
+    # 모든 결과를 한번에 저장
+    if all_rows:
+        print(f"Saving {len(all_rows)} total loop events...")
+        save_rows(all_rows)
+    else:
+        print("No loop events to save")
 
 if __name__ == "__main__":
     main()
