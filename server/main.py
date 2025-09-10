@@ -13,6 +13,7 @@ import os
 import psycopg2
 from psycopg2.extras import execute_values
 import logging
+import subprocess
 
 load_dotenv()
 
@@ -87,15 +88,42 @@ async def get_agent():
                 }
             )
             tools = await client.get_tools()
-            agent = create_react_agent("openai:gpt-4o-mini", tools)
+            
+            # BGP 네트워크 분석 전문가 시스템 프롬프트
+            system_prompt = """
+당신은 BGP(Border Gateway Protocol) 네트워크 분석 전문가입니다.
+
+역할:
+- BGP 이상 탐지 및 네트워크 보안 분석 전문가
+- 사용자의 질문을 분석하여 적절한 SQL 쿼리 작성
+- 쿼리 결과를 전문적으로 해석하고 인사이트 제공
+- BGP 관련 용어와 개념을 쉽게 설명
+
+분석 과정:
+1. 먼저 get_bgp_schema()로 테이블 구조 파악
+2. 사용자 질문에 맞는 SQL 쿼리 작성
+3. execute_bgp_query()로 데이터 조회
+4. 결과를 전문적으로 분석하고 설명
+
+BGP 핵심 개념:
+- Origin Hijack: 프리픽스 하이재킹
+- MOAS: 다중 Origin AS 이상
+- AS Path Loop: 라우팅 루프
+- Prefix Flapping: 경로 불안정
+
+항상 데이터 기반으로 정확하고 전문적인 분석을 제공하세요.
+"""
+            
+            agent = create_react_agent("openai:gpt-4o-mini", tools, system_prompt=system_prompt)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"에이전트 초기화 실패: {str(e)}")
     return agent
 
-# 앱 시작 시 데이터베이스 초기화
+# 앱 시작 시 데이터베이스 초기화 및 MCP 서버 시작
 @app.on_event("startup")
 async def startup_event():
     init_database()
+    subprocess.Popen(["python", "mcp/server.py"], cwd="/app")
 
 @app.get("/")
 async def root():
@@ -165,6 +193,7 @@ async def get_examples():
     ]
     return {"examples": examples}
 
+
 @app.post("/invoke", response_model=MessageResponse)
 async def invoke(request: MessageRequest):
     """자연어 명령을 처리하고 응답을 반환합니다."""
@@ -193,34 +222,6 @@ async def invoke(request: MessageRequest):
             success=False,
             error=str(e)
         )
-
-@app.post("/batch")
-async def batch_invoke(requests: list[MessageRequest]):
-    """여러 명령을 일괄 처리합니다."""
-    try:
-        agent = await get_agent()
-        responses = []
-        
-        for request in requests:
-            try:
-                response = await agent.ainvoke({"messages": request.message})
-                last_message = response['messages'][-1].content if response['messages'] else "응답이 없습니다."
-                responses.append({
-                    "message": request.message,
-                    "response": last_message,
-                    "success": True
-                })
-            except Exception as e:
-                responses.append({
-                    "message": request.message,
-                    "response": "",
-                    "success": False,
-                    "error": str(e)
-                })
-        
-        return {"responses": responses}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"일괄 처리 실패: {str(e)}")
 
 # 기존 BGP 채팅 라우터 포함
 app.include_router(chat.router)

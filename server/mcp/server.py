@@ -1,323 +1,105 @@
-import asyncio
 import json
-import os
 import pandas as pd
-import psycopg2
-from typing import Optional, List, Dict, Any
 from fastmcp import FastMCP
-from sqlalchemy import create_engine, text
-import logging
-from datetime import datetime, timedelta
-import re
+from query_execution import execute_query
 
 # FastMCP 서버 초기화
 mcp = FastMCP(
     name="BGP Analysis Server",
-    instructions="이 서버는 BGP 이상 탐지 데이터를 분석하고 자연어 질의를 SQL 쿼리로 변환하여 답변을 제공합니다."
+    instructions="BGP 네트워크 데이터 분석 도구 제공 - 클라이언트가 전문가 역할 수행"
 )
 
-# 데이터베이스 연결 설정
-TIMESCALE_URI = os.getenv('TIMESCALE_URI', 'postgresql://postgres:postgres@timescaledb:5432/bgp_timeseries')
+@mcp.tool()
+def get_bgp_schema() -> str:
+    """BGP 데이터베이스 테이블 스키마 정보 제공"""
+    schema = {
+        "tables": {
+            "bgp_updates": {
+                "description": "BGP 업데이트 원시 데이터",
+                "columns": {
+                    "time": "TIMESTAMPTZ - BGP 업데이트 시간",
+                    "prefix": "TEXT - 프리픽스 (예: 1.0.0.0/24)",
+                    "peer_as": "INTEGER - Peer AS 번호",
+                    "origin_as": "INTEGER - Origin AS 번호",
+                    "as_path": "INTEGER[] - AS Path 배열",
+                    "next_hop": "TEXT - Next hop IP",
+                    "update_type": "TEXT - announce/withdraw"
+                }
+            },
+            "hijack_events": {
+                "description": "하이재킹 이벤트 통합 테이블",
+                "columns": {
+                    "time": "TIMESTAMPTZ - 이벤트 발생 시간",
+                    "prefix": "TEXT - 영향받은 프리픽스",
+                    "event_type": "TEXT - origin_hijack/moas/subprefix_hijack",
+                    "baseline_origin": "INTEGER - 기존 Origin AS",
+                    "hijacker_origin": "INTEGER - 하이재커 Origin AS",
+                    "summary": "TEXT - 이벤트 요약",
+                    "analyzed_at": "TIMESTAMPTZ - 분석 수행 시간"
+                }
+            },
+            "loop_analysis_results": {
+                "description": "AS Path 루프 분석 결과",
+                "columns": {
+                    "time": "TIMESTAMPTZ - 이벤트 발생 시간",
+                    "prefix": "TEXT - 영향받은 프리픽스",
+                    "peer_as": "INTEGER - Peer AS 번호",
+                    "repeat_as": "INTEGER - 반복된 AS 번호",
+                    "as_path": "INTEGER[] - AS Path 배열",
+                    "summary": "TEXT - 분석 요약"
+                }
+            },
+            "flap_analysis_results": {
+                "description": "프리픽스 플래핑 분석 결과",
+                "columns": {
+                    "time": "TIMESTAMPTZ - 이벤트 발생 시간",
+                    "prefix": "TEXT - 플래핑된 프리픽스",
+                    "peer_as": "INTEGER - Peer AS 번호",
+                    "flap_count": "INTEGER - 플래핑 횟수",
+                    "summary": "TEXT - 분석 요약"
+                }
+            }
+        },
+        "bgp_concepts": {
+            "origin_hijack": "프리픽스의 원래 AS가 아닌 다른 AS에서 광고",
+            "moas": "Multiple Origin AS - 하나의 프리픽스를 여러 AS에서 동시 광고",
+            "subprefix_hijack": "더 구체적인 서브넷을 광고하여 트래픽 가로채기",
+            "as_path_loop": "AS Path에서 동일한 AS가 반복되는 이상 현상",
+            "prefix_flapping": "프리픽스가 짧은 시간 내에 반복적으로 광고/철회"
+        }
+    }
+    
+    return json.dumps(schema, ensure_ascii=False, indent=2)
 
-def get_db_connection():
-    """데이터베이스 연결"""
-    return psycopg2.connect(TIMESCALE_URI)
-
-def get_sqlalchemy_engine():
-    """SQLAlchemy 엔진 생성"""
-    return create_engine(TIMESCALE_URI)
-
-# ===== 1단계: 질의 생성 (자연어 → SQL) =====
-
-def parse_time_range(query: str) -> tuple:
-    """자연어에서 시간 범위 추출"""
-    now = datetime.now()
-    
-    # 오늘, 어제, 최근 N일 등 패턴 매칭
-    if "오늘" in query or "today" in query.lower():
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
-    elif "어제" in query or "yesterday" in query.lower():
-        start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        end = (now - timedelta(days=1)).replace(hour=23, minute=59, second=59, microsecond=999999)
-    elif "최근" in query or "recent" in query.lower():
-        days = 7  # 기본값
-        if "시간" in query:
-            hours = int(re.search(r'(\d+)시간', query).group(1))
-            start = now - timedelta(hours=hours)
-            end = now
-        else:
-            days_match = re.search(r'(\d+)일', query)
-            if days_match:
-                days = int(days_match.group(1))
-            start = now - timedelta(days=days)
-            end = now
-    else:
-        # 기본값: 최근 24시간
-        start = now - timedelta(hours=24)
-        end = now
-    
-    return start, end
-
-def generate_sql_query(query: str) -> str:
-    """자연어 질의를 SQL 쿼리로 변환"""
-    query_lower = query.lower()
-    
-    # 시간 범위 추출
-    start_time, end_time = parse_time_range(query)
-    
-    # 기본 SELECT 절
-    base_select = """
-    SELECT 
-        time,
-        prefix,
-        event_type,
-        origin_asns,
-        distinct_peers,
-        total_events,
-        first_update,
-        last_update,
-        summary
-    FROM hijack_events
-    WHERE time >= %s AND time <= %s
-    """
-    
-    # 이벤트 타입별 필터링
-    if "moas" in query_lower or "moas" in query_lower:
-        base_select += " AND event_type = 'MOAS'"
-    elif "origin" in query_lower or "오리진" in query:
-        base_select += " AND event_type = 'ORIGIN'"
-    elif "subprefix" in query_lower or "서브프리픽스" in query:
-        base_select += " AND event_type = 'SUBPREFIX'"
-    
-    # 정렬 및 제한
-    if "많은" in query or "상위" in query or "top" in query_lower:
-        base_select += " ORDER BY total_events DESC"
-    elif "최근" in query or "recent" in query_lower:
-        base_select += " ORDER BY time DESC"
-    else:
-        base_select += " ORDER BY time DESC"
-    
-    # 결과 수 제한
-    if "몇 개" in query or "개수" in query:
-        base_select = f"SELECT COUNT(*) as count FROM ({base_select}) as subquery"
-    elif "요약" in query or "summary" in query_lower:
-        base_select += " LIMIT 10"
-    else:
-        base_select += " LIMIT 50"
-    
-    return base_select, start_time, end_time
-
-# ===== 2단계: 질의 실행 =====
-
-def execute_query(sql_query: str, params: tuple = None) -> pd.DataFrame:
-    """SQL 쿼리 실행 및 결과 반환"""
+@mcp.tool()
+def execute_bgp_query(sql_query: str, params: str = None) -> str:
+    """SQL 쿼리를 실행하고 결과를 반환"""
     try:
-        engine = get_sqlalchemy_engine()
+        query_params = None
         if params:
-            df = pd.read_sql_query(sql_query, engine, params=params)
-        else:
-            df = pd.read_sql_query(sql_query, engine)
-        return df
+            param_list = json.loads(params)
+            from datetime import datetime
+            query_params = tuple(datetime.fromisoformat(p) if isinstance(p, str) and 'T' in p else p for p in param_list)
+        
+        df = execute_query(sql_query, query_params)
+        
+        result = {
+            "success": True,
+            "row_count": len(df),
+            "columns": list(df.columns) if not df.empty else [],
+            "data": df.to_dict('records') if not df.empty else []
+        }
+        
+        return json.dumps(result, ensure_ascii=False, default=str)
+        
     except Exception as e:
-        print(f"❌ 쿼리 실행 실패: {str(e)}")
-        return pd.DataFrame()
-
-# ===== 3단계: 응답 생성 =====
-
-def generate_response(query: str, df: pd.DataFrame) -> str:
-    """쿼리 결과를 기반으로 자연어 응답 생성"""
-    if df.empty:
-        return "❌ 해당 조건에 맞는 데이터를 찾을 수 없습니다."
-    
-    query_lower = query.lower()
-    
-    # 개수 조회인 경우
-    if "count" in df.columns:
-        count = df['count'].iloc[0]
-        return f"📊 총 {count}개의 이벤트가 발견되었습니다."
-    
-    # 이벤트 타입별 분석
-    if 'event_type' in df.columns:
-        event_counts = df['event_type'].value_counts()
-        response = f"📈 BGP 이상 탐지 결과 (총 {len(df)}개 이벤트):\n\n"
-        
-        for event_type, count in event_counts.items():
-            response += f"• {event_type}: {count}개\n"
-        
-        # 상세 정보
-        if len(df) <= 10:
-            response += "\n📋 상세 정보:\n"
-            for _, row in df.iterrows():
-                response += f"  - {row['time']}: {row['prefix']} ({row['event_type']})\n"
-                response += f"    {row['summary']}\n\n"
-        
-        return response
-    
-    return "📊 데이터 분석이 완료되었습니다."
-
-# ===== MCP 도구들 =====
-
-@mcp.tool()
-def analyze_bgp_events(query: str) -> str:
-    """BGP 이상 탐지 데이터를 분석합니다.
-    
-    Args:
-        query: 자연어 질의 (예: "오늘 MOAS 이벤트가 몇 개 발생했나?", "최근 Origin hijack 패턴을 보여줘")
-    """
-    try:
-        print(f"🔍 [BGP] 질의 분석: {query}")
-        
-        # 1단계: 질의 생성
-        sql_query, start_time, end_time = generate_sql_query(query)
-        print(f"🔍 [BGP] 생성된 SQL: {sql_query}")
-        
-        # 2단계: 질의 실행
-        df = execute_query(sql_query, (start_time, end_time))
-        print(f"🔍 [BGP] 쿼리 결과: {len(df)}개 행")
-        
-        # 3단계: 응답 생성
-        response = generate_response(query, df)
-        print(f"🔍 [BGP] 응답 생성 완료")
-        
-        return response
-    except Exception as e:
-        error_msg = f"❌ BGP 분석 실패: {str(e)}"
-        print(f"🔍 [BGP] 오류: {error_msg}")
-        return error_msg
-
-@mcp.tool()
-def get_bgp_statistics() -> str:
-    """BGP 이상 탐지 통계를 조회합니다."""
-    try:
-        # 전체 통계 쿼리
-        stats_query = """
-        SELECT 
-            event_type,
-            COUNT(*) as total_events,
-            COUNT(DISTINCT prefix) as unique_prefixes,
-            AVG(total_events) as avg_events_per_prefix,
-            MIN(time) as first_event,
-            MAX(time) as last_event
-        FROM hijack_events 
-        WHERE time >= NOW() - INTERVAL '7 days'
-        GROUP BY event_type
-        ORDER BY total_events DESC
-        """
-        
-        df = execute_query(stats_query)
-        
-        if df.empty:
-            return "❌ 최근 7일간 BGP 이상 탐지 데이터가 없습니다."
-        
-        response = "📊 BGP 이상 탐지 통계 (최근 7일):\n\n"
-        
-        for _, row in df.iterrows():
-            response += f"🔸 {row['event_type']}:\n"
-            response += f"  - 총 이벤트: {row['total_events']}개\n"
-            response += f"  - 고유 프리픽스: {row['unique_prefixes']}개\n"
-            response += f"  - 평균 이벤트/프리픽스: {row['avg_events_per_prefix']:.1f}\n"
-            response += f"  - 첫 이벤트: {row['first_event']}\n"
-            response += f"  - 마지막 이벤트: {row['last_event']}\n\n"
-        
-        return response
-    except Exception as e:
-        return f"❌ 통계 조회 실패: {str(e)}"
-
-@mcp.tool()
-def search_specific_prefix(prefix: str, hours: int = 24) -> str:
-    """특정 프리픽스의 BGP 이벤트를 검색합니다.
-    
-    Args:
-        prefix: 검색할 프리픽스 (예: "192.168.1.0/24")
-        hours: 검색할 시간 범위 (기본값: 24시간)
-    """
-    try:
-        start_time = datetime.now() - timedelta(hours=hours)
-        end_time = datetime.now()
-        
-        query = """
-        SELECT 
-            time,
-            prefix,
-            event_type,
-            origin_asns,
-            distinct_peers,
-            total_events,
-            summary
-        FROM hijack_events 
-        WHERE prefix = %s 
-        AND time >= %s AND time <= %s
-        ORDER BY time DESC
-        LIMIT 20
-        """
-        
-        df = execute_query(query, (prefix, start_time, end_time))
-        
-        if df.empty:
-            return f"❌ 프리픽스 '{prefix}'에 대한 최근 {hours}시간 이벤트가 없습니다."
-        
-        response = f"🔍 프리픽스 '{prefix}' 검색 결과 (최근 {hours}시간, {len(df)}개 이벤트):\n\n"
-        
-        for _, row in df.iterrows():
-            response += f"⏰ {row['time']}\n"
-            response += f"   타입: {row['event_type']}\n"
-            response += f"   Origin AS: {row['origin_asns']}\n"
-            response += f"   피어 수: {row['distinct_peers']}\n"
-            response += f"   이벤트 수: {row['total_events']}\n"
-            response += f"   요약: {row['summary']}\n\n"
-        
-        return response
-    except Exception as e:
-        return f"❌ 프리픽스 검색 실패: {str(e)}"
-
-@mcp.tool()
-def get_top_anomalies(limit: int = 10) -> str:
-    """가장 많은 이벤트가 발생한 이상 탐지 결과를 조회합니다.
-    
-    Args:
-        limit: 조회할 상위 개수 (기본값: 10)
-    """
-    try:
-        query = """
-        SELECT 
-            prefix,
-            event_type,
-            total_events,
-            distinct_peers,
-            time,
-            summary
-        FROM hijack_events 
-        WHERE time >= NOW() - INTERVAL '24 hours'
-        ORDER BY total_events DESC
-        LIMIT %s
-        """
-        
-        df = execute_query(query, (limit,))
-        
-        if df.empty:
-            return "❌ 최근 24시간 BGP 이상 탐지 데이터가 없습니다."
-        
-        response = f"🔥 상위 {len(df)}개 BGP 이상 탐지 이벤트 (최근 24시간):\n\n"
-        
-        for i, (_, row) in enumerate(df.iterrows(), 1):
-            response += f"{i}. {row['prefix']} ({row['event_type']})\n"
-            response += f"   이벤트 수: {row['total_events']}개\n"
-            response += f"   피어 수: {row['distinct_peers']}개\n"
-            response += f"   시간: {row['time']}\n"
-            response += f"   요약: {row['summary']}\n\n"
-        
-        return response
-    except Exception as e:
-        return f"❌ 상위 이상 탐지 조회 실패: {str(e)}"
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 if __name__ == "__main__":
     print("🚀 BGP Analysis MCP 서버 시작 (포트: 8001)")
-    print("📊 제공 기능:")
-    print("  - analyze_bgp_events: 자연어 질의로 BGP 데이터 분석")
-    print("  - get_bgp_statistics: BGP 이상 탐지 통계 조회")
-    print("  - search_specific_prefix: 특정 프리픽스 검색")
-    print("  - get_top_anomalies: 상위 이상 탐지 이벤트 조회")
+    print("📊 제공 도구:")
+    print("  1. get_bgp_schema - BGP 테이블 스키마 및 개념 제공")
+    print("  2. execute_bgp_query - SQL 쿼리 실행")
+    print("🧠 MCP 클라이언트가 BGP 네트워크 분석 전문가 역할 수행!")
     
-    # streamable-http 모드로 서버 실행
-    mcp.run(transport="http", host="0.0.0.0", port=8001) 
+    mcp.run(transport="http", host="0.0.0.0", port=8001)
