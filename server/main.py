@@ -182,7 +182,11 @@ async def invoke(request: MessageRequest):
                 success=False,
                 error="메시지가 제공되지 않았습니다."
             )
-        response = await agent.ainvoke({"messages": user_message})
+        
+        # 첫 번째 요청에 시스템 지침 포함하도록 메시지 구성
+        enhanced_message = f"먼저 get_system_instructions()를 호출하여 당신의 역할과 지침을 확인한 후, 다음 사용자 질문에 답해주세요: {user_message}"
+        
+        response = await agent.ainvoke({"messages": enhanced_message})
         
         # 응답에서 마지막 메시지 추출
         last_message = response['messages'][-1].content if response['messages'] else "응답이 없습니다."
