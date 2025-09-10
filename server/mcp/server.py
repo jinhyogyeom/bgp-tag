@@ -10,6 +10,39 @@ mcp = FastMCP(
 )
 
 @mcp.tool()
+def get_system_instructions() -> str:
+    """BGP 분석 전문가 시스템 지침을 제공합니다."""
+    instructions = {
+        "role": "BGP(Border Gateway Protocol) 네트워크 분석 전문가",
+        "responsibilities": [
+            "BGP 이상 탐지 및 네트워크 보안 분석 전문가",
+            "사용자의 질문을 분석하여 적절한 SQL 쿼리 작성",
+            "쿼리 결과를 전문적으로 해석하고 인사이트 제공",
+            "BGP 관련 용어와 개념을 쉽게 설명"
+        ],
+        "analysis_process": [
+            "1. 먼저 get_bgp_schema()로 테이블 구조와 컬럼 정보 파악",
+            "2. get_sql_examples()로 유사한 쿼리 패턴과 예제 참조",
+            "3. 사용자 질문에 맞는 정확한 SQL 쿼리 작성",
+            "4. execute_bgp_query()로 데이터 조회",
+            "5. 결과를 전문적으로 분석하고 설명"
+        ],
+        "database_info": "PostgreSQL TimescaleDB (시계열 데이터 최적화)",
+        "bgp_concepts": {
+            "Origin Hijack": "프리픽스의 원래 AS가 아닌 다른 AS에서 광고",
+            "MOAS": "Multiple Origin AS - 하나의 프리픽스를 여러 AS에서 동시 광고",
+            "AS Path Loop": "AS Path에서 동일한 AS가 반복되는 이상 현상",
+            "Prefix Flapping": "프리픽스가 짧은 시간 내에 반복적으로 광고/철회"
+        },
+        "guidelines": [
+            "항상 스키마와 예제를 참조하여 정확하고 전문적인 분석을 제공하세요.",
+            "시간대, prefix, as 등이 일치하는 데이터가 존재하지 않는 경우 없는 결과를 지어내지 말고 관측된 데이터가 없다고 명시하세요."
+        ]
+    }
+    
+    return json.dumps(instructions, ensure_ascii=False, indent=2)
+
+@mcp.tool()
 def get_bgp_schema() -> str:
     """BGP 데이터베이스 테이블 스키마 정보 제공"""
     schema = {
@@ -77,44 +110,57 @@ def get_sql_examples() -> str:
     examples = {
         "examples": [
             {
-                "question": "최근 24시간 동안 발생한 하이재킹 이벤트를 보여주세요",
+                "question": "최근 24시간 동안 발생한 하이재킹 이벤트를 알려주세요",
                 "sql": "SELECT * FROM hijack_events WHERE time >= NOW() - INTERVAL '24 hours' ORDER BY time DESC LIMIT 10;",
                 "explanation": "최근 24시간의 하이재킹 이벤트를 시간 역순으로 조회"
             },
             {
-                "question": "특정 AS(예: AS12345)와 관련된 이벤트를 찾아주세요",
-                "sql": "SELECT * FROM hijack_events WHERE baseline_origin = 12345 OR hijacker_origin = 12345 ORDER BY time DESC;",
-                "explanation": "AS12345가 피해자이거나 가해자인 하이재킹 이벤트 조회"
+                "question": "특정 AS(예: AS12345)와 관련된 모든 이상현상을 알려주세요",
+                "sql": "SELECT 'hijack' as event_type, * FROM hijack_events WHERE baseline_origin = 12345 OR hijacker_origin = 12345 UNION ALL SELECT 'loop' as event_type, time, prefix, peer_as as peer_as, repeat_as as as_number, as_path, summary FROM loop_analysis_results WHERE peer_as = 12345 OR repeat_as = 12345 UNION ALL SELECT 'flap' as event_type, time, prefix, peer_as as peer_as, flap_count as as_number, NULL as as_path, summary FROM flap_analysis_results WHERE peer_as = 12345 ORDER BY time DESC;",
+                "explanation": "AS12345와 관련된 모든 이상현상(하이재킹, 루프, 플래핑) 통합 조회"
             },
             {
-                "question": "Origin Hijack 이벤트만 필터링해서 보여주세요",
+                "question": "Origin Hijack 이벤트에 대해 알려주세요",
                 "sql": "SELECT * FROM hijack_events WHERE event_type = 'origin_hijack' ORDER BY time DESC LIMIT 20;",
                 "explanation": "Origin Hijack 타입의 이벤트만 조회"
             },
             {
-                "question": "가장 많은 플래핑이 발생한 프리픽스 Top 5를 보여주세요",
+                "question": "가장 많은 플래핑이 발생한 프리픽스들을 알려주세요",
                 "sql": "SELECT prefix, MAX(flap_count) as max_flaps FROM flap_analysis_results GROUP BY prefix ORDER BY max_flaps DESC LIMIT 5;",
                 "explanation": "프리픽스별 최대 플래핑 횟수를 집계하여 상위 5개 조회"
             },
             {
-                "question": "AS Path에 루프가 있는 이벤트의 개수를 세어주세요",
+                "question": "AS Path 루프 이벤트가 얼마나 발생했는지 알려주세요",
                 "sql": "SELECT COUNT(*) as loop_count FROM loop_analysis_results;",
                 "explanation": "AS Path 루프 이벤트의 총 개수 조회"
             },
             {
-                "question": "특정 프리픽스(예: 1.0.0.0/24)와 관련된 모든 이벤트를 찾아주세요",
+                "question": "특정 프리픽스(예: 1.0.0.0/24)와 관련된 모든 이벤트를 알려주세요",
                 "sql": "SELECT * FROM hijack_events WHERE prefix = '1.0.0.0/24' ORDER BY time DESC;",
                 "explanation": "특정 프리픽스와 관련된 모든 하이재킹 이벤트 조회"
+            },
+            {
+                "question": "2024년 1월 15일 오전 9시부터 오후 6시까지 발생한 모든 이상현상을 알려주세요",
+                "sql": "SELECT 'hijack' as event_type, * FROM hijack_events WHERE time >= '2024-01-15 09:00:00' AND time <= '2024-01-15 18:00:00' UNION ALL SELECT 'loop' as event_type, time, prefix, peer_as as peer_as, repeat_as as as_number, as_path, summary FROM loop_analysis_results WHERE time >= '2024-01-15 09:00:00' AND time <= '2024-01-15 18:00:00' UNION ALL SELECT 'flap' as event_type, time, prefix, peer_as as peer_as, flap_count as as_number, NULL as as_path, summary FROM flap_analysis_results WHERE time >= '2024-01-15 09:00:00' AND time <= '2024-01-15 18:00:00' ORDER BY time;",
+                "explanation": "특정 시간 범위(2024-01-15 09:00~18:00)의 모든 이상현상 통합 조회"
+            },
+            {
+                "question": "2024년 2월 1일 하루 동안 발생한 Origin Hijack 이벤트를 알려주세요",
+                "sql": "SELECT * FROM hijack_events WHERE event_type = 'origin_hijack' AND time >= '2024-02-01 00:00:00' AND time < '2024-02-02 00:00:00' ORDER BY time;",
+                "explanation": "특정 날짜(2024-02-01)의 Origin Hijack 이벤트를 시간순으로 조회"
             }
         ],
         "sql_patterns": {
-            "time_filtering": "WHERE time >= NOW() - INTERVAL '24 hours'",
+            "relative_time": "WHERE time >= NOW() - INTERVAL '24 hours'",
+            "specific_time_range": "WHERE time >= '2024-01-15 09:00:00' AND time <= '2024-01-15 18:00:00'",
+            "specific_date": "WHERE time >= '2024-02-01 00:00:00' AND time < '2024-02-02 00:00:00'",
             "ordering": "ORDER BY time DESC",
             "limiting": "LIMIT 10",
             "counting": "SELECT COUNT(*) as count FROM table_name",
             "grouping": "GROUP BY column_name ORDER BY count DESC",
             "event_type_filter": "WHERE event_type = 'origin_hijack'",
-            "as_filtering": "WHERE baseline_origin = AS_NUMBER OR hijacker_origin = AS_NUMBER"
+            "as_filtering": "WHERE baseline_origin = AS_NUMBER OR hijacker_origin = AS_NUMBER",
+            "union_all": "UNION ALL SELECT ... FROM different_table"
         }
     }
     
