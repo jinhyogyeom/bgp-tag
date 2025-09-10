@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS loop_analysis_results (
     as_path INTEGER[] NOT NULL,           -- AS_PATH (정수 배열)
     path_len INTEGER NOT NULL,            -- AS_PATH 길이
     summary TEXT NOT NULL,                -- 분석 요약
-    analyzed_at TIMESTAMPTZ NOT NULL      -- 분석 수행 시간
+    analyzed_at TIMESTAMPTZ NOT NULL,     -- 분석 수행 시간
+    UNIQUE(time, prefix, peer_as, repeat_as, first_idx, second_idx)  -- ON CONFLICT를 위한 고유 제약조건
 );
 
 -- moas_analysis_results 테이블은 hijack_events에 통합됨 (삭제)
@@ -89,4 +90,10 @@ CREATE OR REPLACE VIEW subprefix_hijack_events AS
 SELECT * FROM hijack_events WHERE event_type = 'SUBPREFIX';
 
 CREATE OR REPLACE VIEW moas_events AS
-SELECT * FROM hijack_events WHERE event_type = 'MOAS'; 
+SELECT * FROM hijack_events WHERE event_type = 'MOAS';
+
+-- 7. 기존 테이블에 고유 제약조건 추가 (ALTER 문)
+-- loop_analysis_results 테이블에 고유 제약조건 추가
+ALTER TABLE loop_analysis_results 
+ADD CONSTRAINT loop_analysis_unique 
+UNIQUE (time, prefix, peer_as, repeat_as, first_idx, second_idx); 

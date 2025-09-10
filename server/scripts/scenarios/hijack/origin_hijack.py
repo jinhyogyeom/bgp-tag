@@ -8,13 +8,12 @@ from psycopg2.extras import execute_values
 from sqlalchemy import create_engine
 import os
 
-# ===== 내부 파라미터(코드 내부에서만 사용) =====
-BUCKET_MIN        = 5           # 5분 버킷
-MIN_PEERS         = 2           # 버킷 내 서로 다른 peer 최소 수
-MIN_EVENTS        = 5           # 버킷 내 최소 이벤트 수
-LOOKBACK_DAYS     = 7           # baseline 산정을 위한 과거 기간
-NEW_ORIGIN_RATIO  = 0.60        # 새 origin 우세 비율(>= 이면 교체로 간주)
-REQUIRE_BASELINE  = True        # baseline 없으면 스킵
+# ===== 내부 파라미터 =====
+MIN_PEERS         = 2            # 서로 다른 peer 최소 수 (전체 윈도 기준)
+MIN_EVENTS        = 5            # 전체 윈도 announce 최소 수
+LOOKBACK_DAYS     = 7            # baseline 산정 과거 기간
+NEW_ORIGIN_RATIO  = 0.60         # 새 origin 우세 비율(>= 이면 교체로 간주)
+REQUIRE_BASELINE  = True         # baseline 없으면 스킵할지 여부
 
 # ===== 원본/출력 =====
 TABLE_PREFIX = "update_entries_"
@@ -23,11 +22,9 @@ EVENT_TYPE   = "ORIGIN"
 TIMESCALE_URI = os.getenv('TIMESCALE_URI')
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Origin hijack detector (bucket-only, minimal schema)")
-    p.add_argument("--start_time", type=str, required=True,
-                   help="ISO8601 e.g. 2025-05-25T00:00:00")
-    p.add_argument("--end_time",   type=str, required=True,
-                   help="ISO8601 e.g. 2025-05-25T07:00:00")
+    p = argparse.ArgumentParser(description="Origin hijack detector (whole-window, no buckets)")
+    p.add_argument("--start_time", type=str, required=True, help="ISO8601 e.g. 2025-05-25T00:00:00")
+    p.add_argument("--end_time",   type=str, required=True, help="ISO8601 e.g. 2025-05-25T07:00:00")
     return p.parse_args()
 
 # ---------- 유틸 ----------
@@ -42,7 +39,7 @@ def extract_origin(as_path):
         return None
     return as_path[-1]
 
-# ---------- 원본 ANNOUNCE 적재 ----------
+# ---------- ANNOUNCE 적재 ----------
 def load_announces(start_dt, end_dt) -> pd.DataFrame:
     engine = create_engine(TIMESCALE_URI)
     frames = []
@@ -57,20 +54,23 @@ def load_announces(start_dt, end_dt) -> pd.DataFrame:
         """
         try:
             df = pd.read_sql_query(q, engine, params=(start_dt, end_dt), parse_dates=['timestamp'])
-        except Exception:
+        except Exception as e:
+            print(f"[warn] fetch {tbl} failed: {e}")
             continue
         if df.empty:
             continue
         a = df.explode('announce_prefixes').rename(columns={'announce_prefixes':'prefix'})
         a['as_path'] = a['as_path'].apply(lambda x: x if isinstance(x, list) else (list(x) if x is not None else []))
         frames.append(a[['timestamp','peer_as','as_path','prefix']])
+
     if not frames:
         return pd.DataFrame(columns=['timestamp','peer_as','as_path','prefix'])
+
     out = pd.concat(frames, ignore_index=True)
     out['timestamp'] = pd.to_datetime(out['timestamp'], utc=True)
     return out.sort_values('timestamp')
 
-# ---------- baseline(lookback 최빈 origin) 산정 ----------
+# ---------- baseline(lookback 최빈 origin) ----------
 def build_baseline(df_lookback: pd.DataFrame) -> pd.DataFrame:
     if df_lookback.empty:
         return pd.DataFrame(columns=['prefix','baseline_origin','count'])
@@ -84,23 +84,19 @@ def build_baseline(df_lookback: pd.DataFrame) -> pd.DataFrame:
     winners = cnt.loc[idx].rename(columns={'origin_as':'baseline_origin','cnt':'count'})
     return winners[['prefix','baseline_origin','count']]
 
-# ---------- 5분 버킷 단일 판정 ----------
-def detect_origin_hijack_bucket(df_current: pd.DataFrame, baseline_df: pd.DataFrame):
+# ---------- 전체 윈도 ORIGIN HIJACK 판정 ----------
+def detect_origin_hijack_whole_window(df_current: pd.DataFrame, baseline_df: pd.DataFrame):
     if df_current.empty:
         return []
 
     cur = df_current.copy()
-    cur['bucket']    = cur['timestamp'].dt.floor(f'{BUCKET_MIN}min')
     cur['origin_as'] = cur['as_path'].apply(extract_origin)
     cur = cur[cur['origin_as'].notna()]
 
-    baseline_map = {}
-    has_baseline = not baseline_df.empty
-    if has_baseline:
-        baseline_map = baseline_df.set_index('prefix')['baseline_origin'].to_dict()
+    baseline_map = baseline_df.set_index('prefix')['baseline_origin'].to_dict() if not baseline_df.empty else {}
 
     events = []
-    for (prefix, bucket), g in cur.groupby(['prefix','bucket'], sort=False):
+    for prefix, g in cur.groupby('prefix', sort=False):
         total_events = len(g)
         if total_events < MIN_EVENTS:
             continue
@@ -116,14 +112,13 @@ def detect_origin_hijack_bucket(df_current: pd.DataFrame, baseline_df: pd.DataFr
         if REQUIRE_BASELINE and baseline_origin is None:
             continue
 
-        # 기준과 다르고 새 origin이 충분히 우세할 때만 기록
+        # 기준과 다르고 새 origin이 우세할 때만 이벤트 생성
         if (baseline_origin is None) or (top_origin != baseline_origin and top_ratio >= NEW_ORIGIN_RATIO):
-            # origin별 증거 요약
+            # origin별 증거
             per_origin = {}
             for o, gg in g.groupby('origin_as'):
-                peers = sorted(map(int, gg['peer_as'].unique().tolist()))
                 per_origin[int(o)] = {
-                    "peers": peers,
+                    "peers": sorted(map(int, gg['peer_as'].unique().tolist())),
                     "events": int(len(gg))
                 }
 
@@ -131,7 +126,7 @@ def detect_origin_hijack_bucket(df_current: pd.DataFrame, baseline_df: pd.DataFr
             last_update  = g['timestamp'].max()
 
             evidence = {
-                "bucket_time": bucket.isoformat(),
+                "window": {"start": first_update.isoformat(), "end": last_update.isoformat()},
                 "baseline_origin": baseline_origin,
                 "top_origin": int(top_origin),
                 "top_ratio": round(top_ratio, 3),
@@ -141,14 +136,14 @@ def detect_origin_hijack_bucket(df_current: pd.DataFrame, baseline_df: pd.DataFr
             summary = (
                 f"[{first_update:%Y-%m-%d %H:%M:%S} ~ {last_update:%Y-%m-%d %H:%M:%S}] "
                 f"Origin change for {prefix} | baseline={baseline_origin} → new={int(top_origin)} "
-                f"({int(100*top_ratio)}% in bucket) | peers={distinct_peers} | events={total_events}"
+                f"({int(100*top_ratio)}% window share) | peers={distinct_peers} | events={total_events}"
             )
 
             events.append({
-                "time": bucket,
-                "prefix": prefix,
+                "time": first_update,                 # 대표 시각: 최초 관측
+                "prefix": str(prefix),
                 "event_type": EVENT_TYPE,
-                "origin_asns": [int(top_origin)],      # 주도 origin만 저장(집합 필드 규격 유지)
+                "origin_asns": [int(top_origin)],     # 규격 일치: 집합 형태
                 "distinct_peers": int(distinct_peers),
                 "total_events": int(total_events),
 
@@ -159,8 +154,8 @@ def detect_origin_hijack_bucket(df_current: pd.DataFrame, baseline_df: pd.DataFr
                 "top_origin": int(top_origin),
                 "top_ratio": round(top_ratio, 6),
 
-                "parent_prefix": None,                 # SUBPREFIX 전용
-                "more_specific": None,                 # SUBPREFIX 전용
+                "parent_prefix": None,
+                "more_specific": None,
 
                 "evidence_json": json.dumps(evidence, ensure_ascii=False),
                 "summary": summary,
@@ -176,7 +171,6 @@ def save_events(rows):
         return
     conn = psycopg2.connect(TIMESCALE_URI)
     cur = conn.cursor()
-
     sql = f"""
     INSERT INTO {OUT_TABLE}
     (time, prefix, event_type,
@@ -195,7 +189,6 @@ def save_events(rows):
         r["parent_prefix"], r["more_specific"],
         r["evidence_json"], r["summary"], r["analyzed_at"]
     ) for r in rows]
-
     execute_values(cur, sql, data)
     conn.commit()
     cur.close()
@@ -208,35 +201,31 @@ def main():
     start_dt = pd.to_datetime(args.start_time, utc=True)
     end_dt   = pd.to_datetime(args.end_time,   utc=True)
 
-    # baseline 산정용 lookback
+    # baseline: lookback 윈도에서 최빈 origin 산정
     lookback_start = start_dt - timedelta(days=LOOKBACK_DAYS)
     df_lookback = load_announces(lookback_start, start_dt)
     baseline_df = build_baseline(df_lookback)
 
-    # 시간 범위를 6시간씩 분할하여 처리
+    # 6시간 청크 단위로 로드→탐지→누적 후 마지막에 저장
     all_events = []
     current_time = start_dt
-    
     while current_time < end_dt:
         chunk_end = min(current_time + pd.Timedelta(hours=6), end_dt)
         print(f"Processing chunk: {current_time} to {chunk_end}")
-        
-        df_current = load_announces(current_time, chunk_end)
-        if df_current.empty:
-            print("No announces in this chunk")
-            current_time = chunk_end
-            continue
 
-        events = detect_origin_hijack_bucket(df_current, baseline_df)
-        if events:
-            all_events.extend(events)
-            print(f"Found {len(events)} origin hijack events in this chunk")
+        df_current = load_announces(current_time, chunk_end)
+        if not df_current.empty:
+            events = detect_origin_hijack_whole_window(df_current, baseline_df)
+            if events:
+                all_events.extend(events)
+                print(f"Found {len(events)} origin hijack events in this chunk")
+            else:
+                print("No origin hijack events in this chunk")
         else:
-            print("No origin hijack events in this chunk")
-        
+            print("No announces in this chunk")
+
         current_time = chunk_end
 
-    # 모든 결과를 한번에 저장
     if all_events:
         print(f"Saving {len(all_events)} total origin hijack events...")
         save_events(all_events)
