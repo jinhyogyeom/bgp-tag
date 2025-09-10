@@ -72,6 +72,55 @@ def get_bgp_schema() -> str:
     return json.dumps(schema, ensure_ascii=False, indent=2)
 
 @mcp.tool()
+def get_sql_examples() -> str:
+    """BGP 분석을 위한 Few-shot 예제들을 제공합니다."""
+    examples = {
+        "examples": [
+            {
+                "question": "최근 24시간 동안 발생한 하이재킹 이벤트를 보여주세요",
+                "sql": "SELECT * FROM hijack_events WHERE time >= NOW() - INTERVAL '24 hours' ORDER BY time DESC LIMIT 10;",
+                "explanation": "최근 24시간의 하이재킹 이벤트를 시간 역순으로 조회"
+            },
+            {
+                "question": "특정 AS(예: AS12345)와 관련된 이벤트를 찾아주세요",
+                "sql": "SELECT * FROM hijack_events WHERE baseline_origin = 12345 OR hijacker_origin = 12345 ORDER BY time DESC;",
+                "explanation": "AS12345가 피해자이거나 가해자인 하이재킹 이벤트 조회"
+            },
+            {
+                "question": "Origin Hijack 이벤트만 필터링해서 보여주세요",
+                "sql": "SELECT * FROM hijack_events WHERE event_type = 'origin_hijack' ORDER BY time DESC LIMIT 20;",
+                "explanation": "Origin Hijack 타입의 이벤트만 조회"
+            },
+            {
+                "question": "가장 많은 플래핑이 발생한 프리픽스 Top 5를 보여주세요",
+                "sql": "SELECT prefix, MAX(flap_count) as max_flaps FROM flap_analysis_results GROUP BY prefix ORDER BY max_flaps DESC LIMIT 5;",
+                "explanation": "프리픽스별 최대 플래핑 횟수를 집계하여 상위 5개 조회"
+            },
+            {
+                "question": "AS Path에 루프가 있는 이벤트의 개수를 세어주세요",
+                "sql": "SELECT COUNT(*) as loop_count FROM loop_analysis_results;",
+                "explanation": "AS Path 루프 이벤트의 총 개수 조회"
+            },
+            {
+                "question": "특정 프리픽스(예: 1.0.0.0/24)와 관련된 모든 이벤트를 찾아주세요",
+                "sql": "SELECT * FROM hijack_events WHERE prefix = '1.0.0.0/24' ORDER BY time DESC;",
+                "explanation": "특정 프리픽스와 관련된 모든 하이재킹 이벤트 조회"
+            }
+        ],
+        "sql_patterns": {
+            "time_filtering": "WHERE time >= NOW() - INTERVAL '24 hours'",
+            "ordering": "ORDER BY time DESC",
+            "limiting": "LIMIT 10",
+            "counting": "SELECT COUNT(*) as count FROM table_name",
+            "grouping": "GROUP BY column_name ORDER BY count DESC",
+            "event_type_filter": "WHERE event_type = 'origin_hijack'",
+            "as_filtering": "WHERE baseline_origin = AS_NUMBER OR hijacker_origin = AS_NUMBER"
+        }
+    }
+    
+    return json.dumps(examples, ensure_ascii=False, indent=2)
+
+@mcp.tool()
 def execute_bgp_query(sql_query: str, params: str = None) -> str:
     """SQL 쿼리를 실행하고 결과를 반환"""
     try:
