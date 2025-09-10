@@ -112,6 +112,7 @@ BGP 핵심 개념:
 - Prefix Flapping: 경로 불안정
 
 항상 데이터 기반으로 정확하고 전문적인 분석을 제공하세요.
+(시간대, prefix, as 등이 일치하는 데이터가 존재하지 않는 경우 없는 결과를 지어내지 말고 관측된 데이터가 없다고 명시하세요.)
 """
             
             agent = create_react_agent("openai:gpt-4o-mini", tools, system_prompt=system_prompt)
