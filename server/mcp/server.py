@@ -188,6 +188,7 @@ def execute_bgp_query(sql_query: str, params: str = None) -> str:
         return json.dumps(result, ensure_ascii=False, default=str)
         
     except Exception as e:
+        print(f"MCP 실행 실패: {str(e)}")
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
 if __name__ == "__main__":
