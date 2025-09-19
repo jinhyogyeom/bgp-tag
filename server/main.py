@@ -89,7 +89,7 @@ async def get_agent():
             )
             tools = await client.get_tools()
             
-            agent = create_react_agent("openai:gpt-4o-mini", tools)
+            agent = create_react_agent("openai:gpt-4o", tools)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"에이전트 초기화 실패: {str(e)}")
     return agent

@@ -37,7 +37,7 @@ def get_system_instructions() -> str:
         "guidelines": [
             "항상 스키마와 예제를 참조하여 정확하고 전문적인 분석을 제공하세요.",
             "시간대, prefix, as 등이 일치하는 데이터가 존재하지 않는 경우 없는 결과를 지어내지 말고 관측된 데이터가 없다고 명시하세요."
-        ]
+        ]ㄹ
     }
     
     return json.dumps(instructions, ensure_ascii=False, indent=2)
@@ -64,9 +64,18 @@ def get_bgp_schema() -> str:
                 "columns": {
                     "time": "TIMESTAMPTZ - 이벤트 발생 시간",
                     "prefix": "TEXT - 영향받은 프리픽스",
-                    "event_type": "TEXT - origin_hijack/moas/subprefix_hijack",
-                    "baseline_origin": "INTEGER - 기존 Origin AS",
-                    "hijacker_origin": "INTEGER - 하이재커 Origin AS",
+                    "event_type": "TEXT - ORIGIN/SUBPREFIX/MOAS",
+                    "origin_asns": "INTEGER[] - 출현한 모든 origin AS 목록",
+                    "distinct_peers": "INTEGER - 서로 다른 peer 수",
+                    "total_events": "INTEGER - 총 이벤트 수",
+                    "first_update": "TIMESTAMPTZ - 첫 번째 업데이트 시간",
+                    "last_update": "TIMESTAMPTZ - 마지막 업데이트 시간",
+                    "baseline_origin": "INTEGER - 기준 origin AS",
+                    "top_origin": "INTEGER - 주도 origin AS",
+                    "top_ratio": "FLOAT - 주도 origin 비율",
+                    "parent_prefix": "TEXT - 상위 프리픽스 (SUBPREFIX 전용)",
+                    "more_specific": "TEXT - 하위 프리픽스 (SUBPREFIX 전용)",
+                    "evidence_json": "JSONB - 상세 증거 데이터",
                     "summary": "TEXT - 이벤트 요약",
                     "analyzed_at": "TIMESTAMPTZ - 분석 수행 시간"
                 }
@@ -78,8 +87,12 @@ def get_bgp_schema() -> str:
                     "prefix": "TEXT - 영향받은 프리픽스",
                     "peer_as": "INTEGER - Peer AS 번호",
                     "repeat_as": "INTEGER - 반복된 AS 번호",
+                    "first_idx": "INTEGER - 첫 번째 반복 위치",
+                    "second_idx": "INTEGER - 두 번째 반복 위치",
                     "as_path": "INTEGER[] - AS Path 배열",
-                    "summary": "TEXT - 분석 요약"
+                    "path_len": "INTEGER - AS Path 길이",
+                    "summary": "TEXT - 분석 요약",
+                    "analyzed_at": "TIMESTAMPTZ - 분석 수행 시간"
                 }
             },
             "flap_analysis_results": {
@@ -87,9 +100,12 @@ def get_bgp_schema() -> str:
                 "columns": {
                     "time": "TIMESTAMPTZ - 이벤트 발생 시간",
                     "prefix": "TEXT - 플래핑된 프리픽스",
-                    "peer_as": "INTEGER - Peer AS 번호",
-                    "flap_count": "INTEGER - 플래핑 횟수",
-                    "summary": "TEXT - 분석 요약"
+                    "total_events": "INTEGER - 총 이벤트 수",
+                    "flap_count": "INTEGER - 실제 flap 발생 횟수",
+                    "first_update": "TIMESTAMPTZ - 첫 번째 업데이트 시간",
+                    "last_update": "TIMESTAMPTZ - 마지막 업데이트 시간",
+                    "summary": "TEXT - 분석 요약",
+                    "analyzed_at": "TIMESTAMPTZ - 분석 수행 시간"
                 }
             }
         },
@@ -116,8 +132,8 @@ def get_sql_examples() -> str:
             },
             {
                 "question": "특정 AS(예: AS12345)와 관련된 모든 이상현상을 알려주세요",
-                "sql": "SELECT 'hijack' as event_type, * FROM hijack_events WHERE baseline_origin = 12345 OR hijacker_origin = 12345 UNION ALL SELECT 'loop' as event_type, time, prefix, peer_as as peer_as, repeat_as as as_number, as_path, summary FROM loop_analysis_results WHERE peer_as = 12345 OR repeat_as = 12345 UNION ALL SELECT 'flap' as event_type, time, prefix, peer_as as peer_as, flap_count as as_number, NULL as as_path, summary FROM flap_analysis_results WHERE peer_as = 12345 ORDER BY time DESC;",
-                "explanation": "AS12345와 관련된 모든 이상현상(하이재킹, 루프, 플래핑) 통합 조회"
+                "sql": "SELECT 'hijack' as event_type, time, prefix, baseline_origin as origin_as, top_origin as target_as, NULL::integer[] as as_path, summary FROM hijack_events WHERE baseline_origin = 12345 OR top_origin = 12345 UNION ALL SELECT 'loop' as event_type, time, prefix, peer_as as origin_as, repeat_as as target_as, as_path, summary FROM loop_analysis_results WHERE peer_as = 12345 OR repeat_as = 12345 UNION ALL SELECT 'flap' as event_type, time, prefix, total_events as origin_as, flap_count as target_as, NULL::integer[] as as_path, summary FROM flap_analysis_results ORDER BY time DESC;",
+                "explanation": "AS12345와 관련된 모든 이상현상을 통일된 컬럼 구조로 통합 조회"
             },
             {
                 "question": "Origin Hijack 이벤트에 대해 알려주세요",
@@ -140,27 +156,44 @@ def get_sql_examples() -> str:
                 "explanation": "특정 프리픽스와 관련된 모든 하이재킹 이벤트 조회"
             },
             {
+                "question": "특정 프리픽스(예: 45.239.179.0/24)에서 특정 날짜(2025-05-25)에 발생한 모든 이상현상을 분석해주세요",
+                "sql": "SELECT 'hijack' as event_type, time, prefix, baseline_origin as origin_as, top_origin as target_as, NULL::integer[] as as_path, summary FROM hijack_events WHERE prefix = '45.239.179.0/24' AND time::date = '2025-05-25' UNION ALL SELECT 'loop' as event_type, time, prefix, peer_as as origin_as, repeat_as as target_as, as_path, summary FROM loop_analysis_results WHERE prefix = '45.239.179.0/24' AND time::date = '2025-05-25' UNION ALL SELECT 'flap' as event_type, time, prefix, total_events as origin_as, flap_count as target_as, NULL::integer[] as as_path, summary FROM flap_analysis_results WHERE prefix = '45.239.179.0/24' AND time::date = '2025-05-25' ORDER BY time;",
+                "explanation": "특정 프리픽스와 날짜의 모든 이상현상을 통일된 구조로 시간순 조회"
+            },
+            {
                 "question": "2024년 1월 15일 오전 9시부터 오후 6시까지 발생한 모든 이상현상을 알려주세요",
-                "sql": "SELECT 'hijack' as event_type, * FROM hijack_events WHERE time >= '2024-01-15 09:00:00' AND time <= '2024-01-15 18:00:00' UNION ALL SELECT 'loop' as event_type, time, prefix, peer_as as peer_as, repeat_as as as_number, as_path, summary FROM loop_analysis_results WHERE time >= '2024-01-15 09:00:00' AND time <= '2024-01-15 18:00:00' UNION ALL SELECT 'flap' as event_type, time, prefix, peer_as as peer_as, flap_count as as_number, NULL as as_path, summary FROM flap_analysis_results WHERE time >= '2024-01-15 09:00:00' AND time <= '2024-01-15 18:00:00' ORDER BY time;",
-                "explanation": "특정 시간 범위(2024-01-15 09:00~18:00)의 모든 이상현상 통합 조회"
+                "sql": "SELECT 'hijack' as event_type, time, prefix, baseline_origin as origin_as, top_origin as target_as, NULL::integer[] as as_path, summary FROM hijack_events WHERE time >= '2024-01-15 09:00:00' AND time <= '2024-01-15 18:00:00' UNION ALL SELECT 'loop' as event_type, time, prefix, peer_as as origin_as, repeat_as as target_as, as_path, summary FROM loop_analysis_results WHERE time >= '2024-01-15 09:00:00' AND time <= '2024-01-15 18:00:00' UNION ALL SELECT 'flap' as event_type, time, prefix, total_events as origin_as, flap_count as target_as, NULL::integer[] as as_path, summary FROM flap_analysis_results WHERE time >= '2024-01-15 09:00:00' AND time <= '2024-01-15 18:00:00' ORDER BY time;",
+                "explanation": "특정 시간 범위(2024-01-15 09:00~18:00)의 모든 이상현상을 통일된 컬럼 구조로 통합 조회"
             },
             {
                 "question": "2024년 2월 1일 하루 동안 발생한 Origin Hijack 이벤트를 알려주세요",
                 "sql": "SELECT * FROM hijack_events WHERE event_type = 'origin_hijack' AND time >= '2024-02-01 00:00:00' AND time < '2024-02-02 00:00:00' ORDER BY time;",
                 "explanation": "특정 날짜(2024-02-01)의 Origin Hijack 이벤트를 시간순으로 조회"
+            },
+            {
+                "question": "2024년 3월 15일에 가장 많은 이상현상이 발생한 프리픽스들을 알려주세요",
+                "sql": "SELECT prefix, event_type, COUNT(*) as count FROM (SELECT prefix, 'hijack' as event_type FROM hijack_events WHERE time >= '2024-03-15 00:00:00' AND time < '2024-03-16 00:00:00' UNION ALL SELECT prefix, 'loop' as event_type FROM loop_analysis_results WHERE time >= '2024-03-15 00:00:00' AND time < '2024-03-16 00:00:00' UNION ALL SELECT prefix, 'flap' as event_type FROM flap_analysis_results WHERE time >= '2024-03-15 00:00:00' AND time < '2024-03-16 00:00:00') all_anomalies GROUP BY prefix, event_type ORDER BY count DESC;",
+                "explanation": "특정 날짜의 모든 이상현상을 종류별로 구분하여 프리픽스별 집계"
+            },
+            {
+                "question": "최근 1주일 동안 어떤 이상현상들이 발생했나요?",
+                "sql": "SELECT event_type, COUNT(*) as total_count, COUNT(DISTINCT prefix) as affected_prefixes FROM (SELECT 'hijack' as event_type, prefix FROM hijack_events WHERE time >= NOW() - INTERVAL '7 days' UNION ALL SELECT 'loop' as event_type, prefix FROM loop_analysis_results WHERE time >= NOW() - INTERVAL '7 days' UNION ALL SELECT 'flap' as event_type, prefix FROM flap_analysis_results WHERE time >= NOW() - INTERVAL '7 days') all_anomalies GROUP BY event_type ORDER BY total_count DESC;",
+                "explanation": "최근 1주일간 모든 이상현상 종류별 통계 (총 발생 횟수와 영향받은 프리픽스 수)"
             }
         ],
         "sql_patterns": {
             "relative_time": "WHERE time >= NOW() - INTERVAL '24 hours'",
             "specific_time_range": "WHERE time >= '2024-01-15 09:00:00' AND time <= '2024-01-15 18:00:00'",
             "specific_date": "WHERE time >= '2024-02-01 00:00:00' AND time < '2024-02-02 00:00:00'",
+            "date_filter": "WHERE time::date = '2025-05-25'",
             "ordering": "ORDER BY time DESC",
             "limiting": "LIMIT 10",
             "counting": "SELECT COUNT(*) as count FROM table_name",
             "grouping": "GROUP BY column_name ORDER BY count DESC",
             "event_type_filter": "WHERE event_type = 'origin_hijack'",
             "as_filtering": "WHERE baseline_origin = AS_NUMBER OR hijacker_origin = AS_NUMBER",
-            "union_all": "UNION ALL SELECT ... FROM different_table"
+            "union_all_unified": "SELECT 'hijack' as event_type, time, prefix, baseline_origin as origin_as, hijacker_origin as target_as, NULL::integer[] as as_path, summary FROM hijack_events WHERE ... UNION ALL SELECT 'loop' as event_type, time, prefix, peer_as as origin_as, repeat_as as target_as, as_path, summary FROM loop_analysis_results WHERE ... UNION ALL SELECT 'flap' as event_type, time, prefix, peer_as as origin_as, flap_count as target_as, NULL::integer[] as as_path, summary FROM flap_analysis_results WHERE ...",
+            "avoid_select_star": "절대 SELECT * 와 UNION ALL을 함께 사용하지 말것 - 컬럼 수 불일치 오류 발생"
         }
     }
     

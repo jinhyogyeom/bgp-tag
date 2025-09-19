@@ -36,10 +36,6 @@ CREATE TABLE IF NOT EXISTS loop_analysis_results (
     UNIQUE(time, prefix, peer_as, repeat_as, first_idx, second_idx)  -- ON CONFLICT를 위한 고유 제약조건
 );
 
--- moas_analysis_results 테이블은 hijack_events에 통합됨 (삭제)
-
--- invalid_prefix_analysis_results 테이블은 현재 사용하지 않음 (제거)
-
 -- flap_analysis_results 테이블 생성
 CREATE TABLE IF NOT EXISTS flap_analysis_results (
     time TIMESTAMPTZ NOT NULL,           -- 이벤트 발생 시간
