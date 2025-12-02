@@ -21,5 +21,5 @@ def execute_query(sql_query: str, params: Tuple = None) -> pd.DataFrame:
         
         return df
     except Exception as e:
-        print(f"쿼리 실행 실패: {str(e)}")
+        print(f"❌ 쿼리 실행 실패: {str(e)}")
         return pd.DataFrame()

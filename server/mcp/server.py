@@ -2,6 +2,17 @@ import json
 import pandas as pd
 from fastmcp import FastMCP
 from query_execution import execute_query
+import logging
+
+# 로깅 설정 - 깔끔한 출력을 위해 완전 비활성화
+logging.basicConfig(level=logging.CRITICAL)
+logging.getLogger("fastmcp").disabled = True
+logging.getLogger("uvicorn").disabled = True
+logging.getLogger("uvicorn.access").disabled = True
+logging.getLogger("uvicorn.error").disabled = True
+logging.getLogger("sqlalchemy").disabled = True
+logging.getLogger("sqlalchemy.engine").disabled = True
+logging.getLogger("sqlalchemy.pool").disabled = True
 
 # FastMCP 서버 초기화
 mcp = FastMCP(
@@ -37,7 +48,7 @@ def get_system_instructions() -> str:
         "guidelines": [
             "항상 스키마와 예제를 참조하여 정확하고 전문적인 분석을 제공하세요.",
             "시간대, prefix, as 등이 일치하는 데이터가 존재하지 않는 경우 없는 결과를 지어내지 말고 관측된 데이터가 없다고 명시하세요."
-        ]ㄹ
+        ]
     }
     
     return json.dumps(instructions, ensure_ascii=False, indent=2)
@@ -100,6 +111,7 @@ def get_bgp_schema() -> str:
                 "columns": {
                     "time": "TIMESTAMPTZ - 이벤트 발생 시간",
                     "prefix": "TEXT - 플래핑된 프리픽스",
+                    "peer_as": "BIGINT - Peer AS 번호",
                     "total_events": "INTEGER - 총 이벤트 수",
                     "flap_count": "INTEGER - 실제 flap 발생 횟수",
                     "first_update": "TIMESTAMPTZ - 첫 번째 업데이트 시간",
@@ -132,7 +144,7 @@ def get_sql_examples() -> str:
             },
             {
                 "question": "특정 AS(예: AS12345)와 관련된 모든 이상현상을 알려주세요",
-                "sql": "SELECT 'hijack' as event_type, time, prefix, baseline_origin as origin_as, top_origin as target_as, NULL::integer[] as as_path, summary FROM hijack_events WHERE baseline_origin = 12345 OR top_origin = 12345 UNION ALL SELECT 'loop' as event_type, time, prefix, peer_as as origin_as, repeat_as as target_as, as_path, summary FROM loop_analysis_results WHERE peer_as = 12345 OR repeat_as = 12345 UNION ALL SELECT 'flap' as event_type, time, prefix, total_events as origin_as, flap_count as target_as, NULL::integer[] as as_path, summary FROM flap_analysis_results ORDER BY time DESC;",
+                "sql": "SELECT 'hijack' as event_type, time, prefix, baseline_origin as origin_as, top_origin as target_as, NULL::integer[] as as_path, summary FROM hijack_events WHERE baseline_origin = 12345 OR top_origin = 12345 UNION ALL SELECT 'loop' as event_type, time, prefix, peer_as as origin_as, repeat_as as target_as, as_path, summary FROM loop_analysis_results WHERE peer_as = 12345 OR repeat_as = 12345 UNION ALL SELECT 'flap' as event_type, time, prefix, peer_as as origin_as, flap_count as target_as, NULL::integer[] as as_path, summary FROM flap_analysis_results WHERE peer_as = 12345 ORDER BY time DESC;",
                 "explanation": "AS12345와 관련된 모든 이상현상을 통일된 컬럼 구조로 통합 조회"
             },
             {
@@ -142,8 +154,8 @@ def get_sql_examples() -> str:
             },
             {
                 "question": "가장 많은 플래핑이 발생한 프리픽스들을 알려주세요",
-                "sql": "SELECT prefix, MAX(flap_count) as max_flaps FROM flap_analysis_results GROUP BY prefix ORDER BY max_flaps DESC LIMIT 5;",
-                "explanation": "프리픽스별 최대 플래핑 횟수를 집계하여 상위 5개 조회"
+                "sql": "SELECT prefix, peer_as, MAX(flap_count) as max_flaps FROM flap_analysis_results GROUP BY prefix, peer_as ORDER BY max_flaps DESC LIMIT 5;",
+                "explanation": "프리픽스와 Peer AS별 최대 플래핑 횟수를 집계하여 상위 5개 조회"
             },
             {
                 "question": "AS Path 루프 이벤트가 얼마나 발생했는지 알려주세요",
@@ -157,12 +169,12 @@ def get_sql_examples() -> str:
             },
             {
                 "question": "특정 프리픽스(예: 45.239.179.0/24)에서 특정 날짜(2025-05-25)에 발생한 모든 이상현상을 분석해주세요",
-                "sql": "SELECT 'hijack' as event_type, time, prefix, baseline_origin as origin_as, top_origin as target_as, NULL::integer[] as as_path, summary FROM hijack_events WHERE prefix = '45.239.179.0/24' AND time::date = '2025-05-25' UNION ALL SELECT 'loop' as event_type, time, prefix, peer_as as origin_as, repeat_as as target_as, as_path, summary FROM loop_analysis_results WHERE prefix = '45.239.179.0/24' AND time::date = '2025-05-25' UNION ALL SELECT 'flap' as event_type, time, prefix, total_events as origin_as, flap_count as target_as, NULL::integer[] as as_path, summary FROM flap_analysis_results WHERE prefix = '45.239.179.0/24' AND time::date = '2025-05-25' ORDER BY time;",
+                "sql": "SELECT 'hijack' as event_type, time, prefix, baseline_origin as origin_as, top_origin as target_as, NULL::integer[] as as_path, summary FROM hijack_events WHERE prefix = '45.239.179.0/24' AND time::date = '2025-05-25' UNION ALL SELECT 'loop' as event_type, time, prefix, peer_as as origin_as, repeat_as as target_as, as_path, summary FROM loop_analysis_results WHERE prefix = '45.239.179.0/24' AND time::date = '2025-05-25' UNION ALL SELECT 'flap' as event_type, time, prefix, peer_as as origin_as, flap_count as target_as, NULL::integer[] as as_path, summary FROM flap_analysis_results WHERE prefix = '45.239.179.0/24' AND time::date = '2025-05-25' ORDER BY time;",
                 "explanation": "특정 프리픽스와 날짜의 모든 이상현상을 통일된 구조로 시간순 조회"
             },
             {
                 "question": "2024년 1월 15일 오전 9시부터 오후 6시까지 발생한 모든 이상현상을 알려주세요",
-                "sql": "SELECT 'hijack' as event_type, time, prefix, baseline_origin as origin_as, top_origin as target_as, NULL::integer[] as as_path, summary FROM hijack_events WHERE time >= '2024-01-15 09:00:00' AND time <= '2024-01-15 18:00:00' UNION ALL SELECT 'loop' as event_type, time, prefix, peer_as as origin_as, repeat_as as target_as, as_path, summary FROM loop_analysis_results WHERE time >= '2024-01-15 09:00:00' AND time <= '2024-01-15 18:00:00' UNION ALL SELECT 'flap' as event_type, time, prefix, total_events as origin_as, flap_count as target_as, NULL::integer[] as as_path, summary FROM flap_analysis_results WHERE time >= '2024-01-15 09:00:00' AND time <= '2024-01-15 18:00:00' ORDER BY time;",
+                "sql": "SELECT 'hijack' as event_type, time, prefix, baseline_origin as origin_as, top_origin as target_as, NULL::integer[] as as_path, summary FROM hijack_events WHERE time >= '2024-01-15 09:00:00' AND time <= '2024-01-15 18:00:00' UNION ALL SELECT 'loop' as event_type, time, prefix, peer_as as origin_as, repeat_as as target_as, as_path, summary FROM loop_analysis_results WHERE time >= '2024-01-15 09:00:00' AND time <= '2024-01-15 18:00:00' UNION ALL SELECT 'flap' as event_type, time, prefix, peer_as as origin_as, flap_count as target_as, NULL::integer[] as as_path, summary FROM flap_analysis_results WHERE time >= '2024-01-15 09:00:00' AND time <= '2024-01-15 18:00:00' ORDER BY time;",
                 "explanation": "특정 시간 범위(2024-01-15 09:00~18:00)의 모든 이상현상을 통일된 컬럼 구조로 통합 조회"
             },
             {
@@ -179,6 +191,31 @@ def get_sql_examples() -> str:
                 "question": "최근 1주일 동안 어떤 이상현상들이 발생했나요?",
                 "sql": "SELECT event_type, COUNT(*) as total_count, COUNT(DISTINCT prefix) as affected_prefixes FROM (SELECT 'hijack' as event_type, prefix FROM hijack_events WHERE time >= NOW() - INTERVAL '7 days' UNION ALL SELECT 'loop' as event_type, prefix FROM loop_analysis_results WHERE time >= NOW() - INTERVAL '7 days' UNION ALL SELECT 'flap' as event_type, prefix FROM flap_analysis_results WHERE time >= NOW() - INTERVAL '7 days') all_anomalies GROUP BY event_type ORDER BY total_count DESC;",
                 "explanation": "최근 1주일간 모든 이상현상 종류별 통계 (총 발생 횟수와 영향받은 프리픽스 수)"
+            },
+            {
+                "question": "특정 AS(예: AS3549)에서 발생한 플래핑 이벤트를 알려주세요",
+                "sql": "SELECT * FROM flap_analysis_results WHERE peer_as = 3549 ORDER BY time DESC LIMIT 10;",
+                "explanation": "특정 Peer AS에서 발생한 플래핑 이벤트를 시간 역순으로 조회"
+            },
+            {
+                "question": "2021년 10월 25일 하루 동안 가장 많이 플래핑된 프리픽스와 Peer AS 조합을 알려주세요",
+                "sql": "SELECT prefix, peer_as, MAX(flap_count) as max_flaps, COUNT(*) as event_count FROM flap_analysis_results WHERE time >= '2021-10-25 00:00:00' AND time < '2021-10-26 00:00:00' GROUP BY prefix, peer_as ORDER BY max_flaps DESC, event_count DESC LIMIT 10;",
+                "explanation": "특정 날짜의 프리픽스-Peer AS별 최대 플래핑 횟수와 이벤트 발생 횟수를 집계"
+            },
+            {
+                "question": "플래핑이 10회 이상 발생한 심각한 이벤트들을 알려주세요",
+                "sql": "SELECT prefix, peer_as, flap_count, first_update, last_update, summary FROM flap_analysis_results WHERE flap_count >= 10 ORDER BY flap_count DESC, time DESC LIMIT 20;",
+                "explanation": "플래핑 횟수가 10회 이상인 심각한 이벤트들을 플래핑 횟수와 시간 역순으로 조회"
+            },
+            {
+                "question": "2021년 10월 25일 06:00:00 ~ 12:00:00 구간 동안 플랩 빈도가 가장 높은 AS 상위 5개를 알려주세요",
+                "sql": "SELECT peer_as, SUM(flap_count) as total_flaps, COUNT(*) as event_count FROM flap_analysis_results WHERE time >= '2021-10-25 06:00:00' AND time < '2021-10-25 12:00:00' GROUP BY peer_as ORDER BY total_flaps DESC LIMIT 5;",
+                "explanation": "특정 시간 구간에서 Peer AS별 총 플래핑 횟수와 이벤트 발생 횟수를 집계하여 상위 5개 조회"
+            },
+            {
+                "question": "특정 시간대에 가장 활발하게 플래핑한 AS들을 분석해주세요",
+                "sql": "SELECT peer_as, COUNT(DISTINCT prefix) as affected_prefixes, SUM(flap_count) as total_flaps, AVG(flap_count) as avg_flaps FROM flap_analysis_results WHERE time >= '2021-10-25 00:00:00' AND time < '2021-10-26 00:00:00' GROUP BY peer_as HAVING COUNT(*) >= 5 ORDER BY total_flaps DESC LIMIT 10;",
+                "explanation": "하루 동안 5회 이상 플래핑 이벤트가 발생한 AS들의 영향받은 프리픽스 수, 총 플래핑 횟수, 평균 플래핑 횟수를 분석"
             }
         ],
         "sql_patterns": {
@@ -192,16 +229,40 @@ def get_sql_examples() -> str:
             "grouping": "GROUP BY column_name ORDER BY count DESC",
             "event_type_filter": "WHERE event_type = 'origin_hijack'",
             "as_filtering": "WHERE baseline_origin = AS_NUMBER OR hijacker_origin = AS_NUMBER",
-            "union_all_unified": "SELECT 'hijack' as event_type, time, prefix, baseline_origin as origin_as, hijacker_origin as target_as, NULL::integer[] as as_path, summary FROM hijack_events WHERE ... UNION ALL SELECT 'loop' as event_type, time, prefix, peer_as as origin_as, repeat_as as target_as, as_path, summary FROM loop_analysis_results WHERE ... UNION ALL SELECT 'flap' as event_type, time, prefix, peer_as as origin_as, flap_count as target_as, NULL::integer[] as as_path, summary FROM flap_analysis_results WHERE ...",
+            "union_all_unified": "SELECT 'hijack' as event_type, time, prefix, baseline_origin as origin_as, top_origin as target_as, NULL::integer[] as as_path, summary FROM hijack_events WHERE ... UNION ALL SELECT 'loop' as event_type, time, prefix, peer_as as origin_as, repeat_as as target_as, as_path, summary FROM loop_analysis_results WHERE ... UNION ALL SELECT 'flap' as event_type, time, prefix, peer_as as origin_as, flap_count as target_as, NULL::integer[] as as_path, summary FROM flap_analysis_results WHERE ...",
             "avoid_select_star": "절대 SELECT * 와 UNION ALL을 함께 사용하지 말것 - 컬럼 수 불일치 오류 발생"
         }
     }
     
     return json.dumps(examples, ensure_ascii=False, indent=2)
 
+def estimate_tokens(text: str) -> int:
+    """텍스트의 대략적인 토큰 수 추정 (1 토큰 ≈ 4글자)"""
+    return len(text) // 4
+
+def smart_limit_data(df, max_tokens: int = 20000):
+    """데이터를 토큰 제한에 맞춰 자동으로 제한"""
+    if df.empty:
+        return df, False
+    
+    # 샘플 데이터로 토큰 수 추정
+    sample_data = df.head(10).to_dict('records')
+    sample_json = json.dumps(sample_data, ensure_ascii=False, default=str)
+    tokens_per_10_rows = estimate_tokens(sample_json)
+    
+    if tokens_per_10_rows == 0:
+        return df, False
+    
+    # 안전 마진을 두고 최대 행 수 계산
+    max_rows = min(len(df), (max_tokens * 10) // (tokens_per_10_rows * 2))
+    
+    if max_rows < len(df):
+        return df.head(max_rows), True
+    return df, False
+
 @mcp.tool()
 def execute_bgp_query(sql_query: str, params: str = None) -> str:
-    """SQL 쿼리를 실행하고 결과를 반환"""
+    """SQL 쿼리를 실행하고 결과를 반환 (토큰 제한 자동 적용)"""
     try:
         query_params = None
         if params:
@@ -210,13 +271,21 @@ def execute_bgp_query(sql_query: str, params: str = None) -> str:
             query_params = tuple(datetime.fromisoformat(p) if isinstance(p, str) and 'T' in p else p for p in param_list)
         
         df = execute_query(sql_query, query_params)
+        original_count = len(df)
+        
+        df_limited, was_limited = smart_limit_data(df, max_tokens=20000)
         
         result = {
             "success": True,
-            "row_count": len(df),
-            "columns": list(df.columns) if not df.empty else [],
-            "data": df.to_dict('records') if not df.empty else []
+            "row_count": len(df_limited),
+            "original_count": original_count,
+            "was_limited": was_limited,
+            "columns": list(df_limited.columns) if not df_limited.empty else [],
+            "data": df_limited.to_dict('records') if not df_limited.empty else []
         }
+        
+        if was_limited:
+            result["warning"] = f"이 외에도 {original_count - len(df_limited)}개의 데이터가 더 있습니다."
         
         return json.dumps(result, ensure_ascii=False, default=str)
         
@@ -231,4 +300,4 @@ if __name__ == "__main__":
     print("  2. execute_bgp_query - SQL 쿼리 실행")
     print("🧠 MCP 클라이언트가 BGP 네트워크 분석 전문가 역할 수행!")
     
-    mcp.run(transport="http", host="0.0.0.0", port=8001)
+    mcp.run(transport="http", host="0.0.0.0", port=8001, log_level="critical")

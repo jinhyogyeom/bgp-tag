@@ -203,22 +203,23 @@ def main():
 
     # baseline: lookback 윈도에서 최빈 origin 산정
     lookback_start = start_dt - timedelta(days=LOOKBACK_DAYS)
-    df_lookback = load_announces(lookback_start, start_dt)
+    df_lookback = load_announces(lookback_start, start_dt) 
     baseline_df = build_baseline(df_lookback)
 
-    # 6시간 청크 단위로 로드→탐지→누적 후 마지막에 저장
-    all_events = []
+    # 1시간 청크 단위로 로드→탐지→즉시 저장 (메모리 사용량 최소화)
+    total_saved = 0
     current_time = start_dt
     while current_time < end_dt:
-        chunk_end = min(current_time + pd.Timedelta(hours=6), end_dt)
+        chunk_end = min(current_time + pd.Timedelta(hours=1), end_dt)
         print(f"Processing chunk: {current_time} to {chunk_end}")
 
         df_current = load_announces(current_time, chunk_end)
         if not df_current.empty:
             events = detect_origin_hijack_whole_window(df_current, baseline_df)
             if events:
-                all_events.extend(events)
                 print(f"Found {len(events)} origin hijack events in this chunk")
+                save_events(events)  # 청크별 즉시 저장
+                total_saved += len(events)
             else:
                 print("No origin hijack events in this chunk")
         else:
@@ -226,11 +227,7 @@ def main():
 
         current_time = chunk_end
 
-    if all_events:
-        print(f"Saving {len(all_events)} total origin hijack events...")
-        save_events(all_events)
-    else:
-        print("No origin hijack events to save")
+    print(f"Total saved: {total_saved} origin hijack events")
 
 if __name__ == "__main__":
     main()

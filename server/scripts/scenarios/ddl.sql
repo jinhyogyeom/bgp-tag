@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS hijack_events (
     time TIMESTAMPTZ NOT NULL,           -- 이벤트 발생 시간 (TimescaleDB 파티셔닝 키)
     prefix TEXT NOT NULL,                 -- 영향받은 프리픽스
     event_type TEXT NOT NULL,             -- 이벤트 타입 (ORIGIN, SUBPREFIX, MOAS)
-    origin_asns INTEGER[] NOT NULL,       -- 출현한 모든 origin AS 목록
+    origin_asns BIGINT[] NOT NULL,        -- 출현한 모든 origin AS 목록
     distinct_peers INTEGER NOT NULL,      -- 서로 다른 peer 수
     total_events INTEGER NOT NULL,        -- 해당 시간대의 총 이벤트 수
     first_update TIMESTAMPTZ NOT NULL,    -- 첫 번째 업데이트 시간
@@ -25,12 +25,12 @@ CREATE TABLE IF NOT EXISTS hijack_events (
 CREATE TABLE IF NOT EXISTS loop_analysis_results (
     time TIMESTAMPTZ NOT NULL,           -- 이벤트 발생 시간
     prefix TEXT NOT NULL,                 -- 영향받은 프리픽스
-    peer_as INTEGER NOT NULL,             -- peer AS 번호
-    repeat_as INTEGER NOT NULL,           -- 반복된 AS 번호
-    first_idx INTEGER NOT NULL,           -- 첫 번째 반복 위치
-    second_idx INTEGER NOT NULL,          -- 두 번째 반복 위치
-    as_path INTEGER[] NOT NULL,           -- AS_PATH (정수 배열)
-    path_len INTEGER NOT NULL,            -- AS_PATH 길이
+    peer_as BIGINT NOT NULL,              -- peer AS 번호
+    repeat_as BIGINT NOT NULL,            -- 반복된 AS 번호
+    first_idx BIGINT NOT NULL,            -- 첫 번째 반복 위치
+    second_idx BIGINT NOT NULL,           -- 두 번째 반복 위치
+    as_path BIGINT[] NOT NULL,            -- AS_PATH (정수 배열)
+    path_len BIGINT NOT NULL,             -- AS_PATH 길이
     summary TEXT NOT NULL,                -- 분석 요약
     analyzed_at TIMESTAMPTZ NOT NULL,     -- 분석 수행 시간
     UNIQUE(time, prefix, peer_as, repeat_as, first_idx, second_idx)  -- ON CONFLICT를 위한 고유 제약조건
@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS loop_analysis_results (
 CREATE TABLE IF NOT EXISTS flap_analysis_results (
     time TIMESTAMPTZ NOT NULL,           -- 이벤트 발생 시간
     prefix TEXT NOT NULL,                 -- 영향받은 프리픽스
+    peer_as BIGINT NOT NULL,              -- peer AS 번호
     total_events INTEGER NOT NULL,        -- 해당 시간대의 총 이벤트 수
     flap_count INTEGER NOT NULL,          -- 실제 flap 발생 횟수
     first_update TIMESTAMPTZ NOT NULL,    -- 첫 번째 업데이트 시간

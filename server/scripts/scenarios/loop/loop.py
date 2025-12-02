@@ -143,12 +143,12 @@ def main():
     start_dt = pd.to_datetime(args.start_time, utc=True)
     end_dt   = pd.to_datetime(args.end_time,   utc=True)
 
-    # 시간 범위를 6시간씩 분할하여 처리
-    all_rows = []
+    # 시간 범위를 1시간씩 분할하여 처리하고 청크별 즉시 저장 (메모리 사용량 최소화)
+    total_saved = 0
     current_time = start_dt
     
     while current_time < end_dt:
-        chunk_end = min(current_time + pd.Timedelta(hours=6), end_dt)
+        chunk_end = min(current_time + pd.Timedelta(hours=1), end_dt)
         print(f"Processing chunk: {current_time} to {chunk_end}")
         
         df = load_announces(current_time, chunk_end)
@@ -159,19 +159,15 @@ def main():
 
         rows = detect_loops(df)
         if rows:
-            all_rows.extend(rows)
             print(f"Found {len(rows)} loop events in this chunk")
+            save_rows(rows)  # 청크별 즉시 저장
+            total_saved += len(rows)
         else:
             print("No loop events in this chunk")
         
         current_time = chunk_end
 
-    # 모든 결과를 한번에 저장
-    if all_rows:
-        print(f"Saving {len(all_rows)} total loop events...")
-        save_rows(all_rows)
-    else:
-        print("No loop events to save")
+    print(f"Total saved: {total_saved} loop events")
 
 if __name__ == "__main__":
     main()

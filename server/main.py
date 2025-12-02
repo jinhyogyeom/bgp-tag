@@ -1,25 +1,19 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+"""BGP Anomaly Detection & Analysis API - Main Application"""
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import chat
 from dotenv import load_dotenv
-import asyncio
 import uvicorn
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from langgraph.prebuilt import create_react_agent
-from typing import Optional
-import dotenv
-import os
-import psycopg2
-from psycopg2.extras import execute_values
-import logging
 import subprocess
+
+from config import setup_logging, init_database
+from routers import chat
+from routers.invoke import router as invoke_router
+from services.agent_service import get_agent
 
 load_dotenv()
 
 # 로깅 설정
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = setup_logging()
 
 app = FastAPI(
     title="🌐 BGP Anomaly Detection & Analysis API",
@@ -35,64 +29,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# 전역 변수로 에이전트 저장
-agent = None
-
-class MessageRequest(BaseModel):
-    message: Optional[str] = None
-    messages: Optional[str] = None
-
-class MessageResponse(BaseModel):
-    response: str
-    success: bool
-    error: str = None
-
-def init_database():
-    """데이터베이스 초기화 - DDL 스크립트 실행"""
-    try:
-        # 데이터베이스 연결
-        db_uri = os.getenv('TIMESCALE_URI', 'postgresql://postgres:postgres@timescaledb:5432/bgp_timeseries')
-        conn = psycopg2.connect(db_uri)
-        cursor = conn.cursor()
-        
-        # DDL 스크립트 파일 읽기
-        ddl_file_path = "/app/scripts/scenarios/ddl.sql"
-        
-        with open(ddl_file_path, 'r') as file:
-            ddl_sql = file.read()
-        
-        # DDL 스크립트 실행
-        cursor.execute(ddl_sql)
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-        logger.info("Database initialization completed successfully")
-        
-    except Exception as e:
-        logger.error(f"Database initialization failed: {e}")
-
-async def get_agent():
-    """MCP 에이전트를 초기화하고 반환합니다."""
-    global agent
-    if agent is None:
-        try:
-            client = MultiServerMCPClient(
-                {
-                    "bgp_analysis": {
-                        "transport": "streamable_http",
-                        "url": "http://localhost:8001/mcp/"
-                    }
-                }
-            )
-            tools = await client.get_tools()
-            
-            agent = create_react_agent("openai:gpt-4o", tools)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"에이전트 초기화 실패: {str(e)}")
-    return agent
 
 # 앱 시작 시 데이터베이스 초기화 및 MCP 서버 시작
 @app.on_event("startup")
@@ -134,75 +70,8 @@ async def health_check():
             "database_connected": False
         }
 
-@app.get("/examples")
-async def get_examples():
-    """사용 가능한 예제 목록을 반환합니다."""
-    examples = [
-        {
-            "category": "BGP 분석",
-            "examples": [
-                "오늘 BGP 이상 탐지 결과를 보여줘",
-                "MOAS 이벤트가 얼마나 발생했나?",
-                "Origin hijack 패턴을 분석해줘",
-                "BGP flap 현황을 확인해줘"
-            ]
-        },
-        {
-            "category": "데이터 조회",
-            "examples": [
-                "2025-05-25 데이터를 분석해줘",
-                "최근 24시간 BGP 이벤트를 보여줘",
-                "특정 AS의 BGP 행동을 분석해줘",
-                "프리픽스별 이상 패턴을 찾아줘"
-            ]
-        },
-        {
-            "category": "복합 명령",
-            "examples": [
-                "BGP 이상 탐지 결과를 요약하고 주요 패턴을 설명해줘",
-                "MOAS와 Origin hijack의 연관성을 분석해줘",
-                "BGP 데이터를 시각화해서 보여줘",
-                "BGP 보안 위협을 평가하고 대응 방안을 제시해줘"
-            ]
-        }
-    ]
-    return {"examples": examples}
-
-
-@app.post("/invoke", response_model=MessageResponse)
-async def invoke(request: MessageRequest):
-    """자연어 명령을 처리하고 응답을 반환합니다."""
-    try:
-        agent = await get_agent()
-        # message 또는 messages 필드 사용
-        user_message = request.message or request.messages
-        if not user_message:
-            return MessageResponse(
-                response="",
-                success=False,
-                error="메시지가 제공되지 않았습니다."
-            )
-        
-        # 첫 번째 요청에 시스템 지침 포함하도록 메시지 구성
-        enhanced_message = f"먼저 get_system_instructions()를 호출하여 당신의 역할과 지침을 확인한 후, 다음 사용자 질문에 답해주세요: {user_message}"
-        
-        response = await agent.ainvoke({"messages": enhanced_message})
-        
-        # 응답에서 마지막 메시지 추출
-        last_message = response['messages'][-1].content if response['messages'] else "응답이 없습니다."
-        
-        return MessageResponse(
-            response=last_message,
-            success=True
-        )
-    except Exception as e:
-        return MessageResponse(
-            response="",
-            success=False,
-            error=str(e)
-        )
-
-# 기존 BGP 채팅 라우터 포함
+# 라우터 포함
+app.include_router(invoke_router)
 app.include_router(chat.router)
 
 if __name__ == "__main__":
@@ -213,4 +82,4 @@ if __name__ == "__main__":
     print("💚 서버 상태: http://localhost:8080/health")
     print("💬 BGP 채팅: http://localhost:8080/chat")
     
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    uvicorn.run(app, host="0.0.0.0", port=8080, log_level="critical")

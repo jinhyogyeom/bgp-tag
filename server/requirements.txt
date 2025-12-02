@@ -24,9 +24,14 @@ loguru>=0.7.0
 pytest>=7.4.0
 pytest-asyncio>=0.21.0
 pybgpstream>=2.0.0
+
+# MCP / LangGraph
 fastmcp
 requests
 langchain
 langchain-openai
 langchain-mcp-adapters
 langgraph
+
+# OpenAI evals (GitHub에서 직접 설치)
+git+https://github.com/openai/evals.git

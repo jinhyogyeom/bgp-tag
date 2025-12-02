@@ -25,10 +25,10 @@ def drop_table_if_exists(target_date: str):
 
 def run_analysis_scripts(start_time: str, end_time: str):
     scripts = [
-        ("loop", f"python scenarios/loop/loop.py"),
+        # ("loop", f"python scenarios/loop/loop.py"),
         ("flap", f"python scenarios/flap/flap.py"),
-        ("moas", f"python scenarios/hijack/moas.py"),
-        ("origin_hijack", f"python scenarios/hijack/origin_hijack.py"),
+        # ("moas", f"python scenarios/hijack/moas.py"),
+        # ("origin_hijack", f"python scenarios/hijack/origin_hijack.py"),
     ]
 
     total_started_at = datetime.now()
@@ -66,6 +66,6 @@ def main(start_time: datetime, end_time: datetime):
 
 
 if __name__ == "__main__":
-    test_start_time = datetime(2025, 5, 25, 0, 0, 0)
-    test_end_time = datetime(2025, 5, 25, 23, 59, 59)
+    test_start_time = datetime(2021, 10, 25, 0, 0, 0)
+    test_end_time = datetime(2021, 10, 26, 23, 59, 59)
     main(test_start_time, test_end_time)
