@@ -1,7 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-from routers import chat
 from dotenv import load_dotenv
 import asyncio
 import uvicorn
@@ -20,6 +19,12 @@ load_dotenv()
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# 불필요한 로그 제거
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logging.getLogger("mcp.client").setLevel(logging.WARNING)
 
 app = FastAPI(
     title="🌐 BGP Anomaly Detection & Analysis API",
@@ -48,32 +53,6 @@ class MessageResponse(BaseModel):
     success: bool
     error: str = None
 
-def init_database():
-    """데이터베이스 초기화 - DDL 스크립트 실행"""
-    try:
-        # 데이터베이스 연결
-        db_uri = os.getenv('TIMESCALE_URI', 'postgresql://postgres:postgres@timescaledb:5432/bgp_timeseries')
-        conn = psycopg2.connect(db_uri)
-        cursor = conn.cursor()
-        
-        # DDL 스크립트 파일 읽기
-        ddl_file_path = "/app/scripts/scenarios/ddl.sql"
-        
-        with open(ddl_file_path, 'r') as file:
-            ddl_sql = file.read()
-        
-        # DDL 스크립트 실행
-        cursor.execute(ddl_sql)
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-        logger.info("Database initialization completed successfully")
-        
-    except Exception as e:
-        logger.error(f"Database initialization failed: {e}")
-
 async def get_agent():
     """MCP 에이전트를 초기화하고 반환합니다."""
     global agent
@@ -97,7 +76,6 @@ async def get_agent():
 # 앱 시작 시 데이터베이스 초기화 및 MCP 서버 시작
 @app.on_event("startup")
 async def startup_event():
-    init_database()
     subprocess.Popen(["python", "mcp/server.py"], cwd="/app")
 
 @app.get("/")
@@ -185,7 +163,8 @@ async def invoke(request: MessageRequest):
         
         # 첫 번째 요청에 시스템 지침 포함하도록 메시지 구성
         enhanced_message = f"먼저 get_system_instructions()를 호출하여 당신의 역할과 지침을 확인한 후, 다음 사용자 질문에 답해주세요: {user_message}"
-        
+        #langgraph로 호출 강제?
+
         response = await agent.ainvoke({"messages": enhanced_message})
         
         # 응답에서 마지막 메시지 추출
@@ -203,8 +182,6 @@ async def invoke(request: MessageRequest):
         )
 
 # 기존 BGP 채팅 라우터 포함
-app.include_router(chat.router)
-
 if __name__ == "__main__":
     print("🚀 BGP Anomaly Detection & Analysis API 서버를 시작합니다...")
     print("🌍 서버 URL: http://localhost:8080")

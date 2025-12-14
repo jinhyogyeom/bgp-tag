@@ -15,7 +15,7 @@ def generate_response(query: str, df: pd.DataFrame) -> str:
     
     # 처음 5개 행만 표시
     for i, (_, row) in enumerate(df.head(5).iterrows(), 1):
-        response += f"{i}. "ㄴ
+        response += f"{i}. "
         for col, val in row.items():
             response += f"{col}: {val}, "
         response = response.rstrip(", ") + "\n"
@@ -29,7 +29,7 @@ def generate_insights(df: pd.DataFrame) -> str:
     """BGP 배경지식을 바탕으로 간단한 인사이트 제공"""
     if df.empty:
         return ""
-    
+
     insights = []
     
     # BGP 이상 탐지 관련 기본 설명

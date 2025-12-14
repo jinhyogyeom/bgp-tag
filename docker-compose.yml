@@ -1,0 +1,65 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: clickhouse-server
+    restart: unless-stopped
+    profiles: ["local"]
+    ports:
+      - "9000:9000"
+      - "8123:8123"
+    environment:
+      - CLICKHOUSE_HOST=clickhouse-server
+      - CLICKHOUSE_PORT=9000
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=jin123
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - clickhouse-logs:/var/log/clickhouse-server
+    networks:
+      - bgp-network
+
+  bgp-streamer:
+    build: ./streamer
+    container_name: bgp-streamer
+    profiles: ["local"]
+    restart: unless-stopped
+    volumes:
+      - ./:/workspace:cached
+      - ./streamer:/app
+    environment:
+      - CLICKHOUSE_HOST=clickhouse-server
+      - CLICKHOUSE_PORT=9000
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=jin123
+    networks:
+      - bgp-network
+  bgp-app:
+    build:
+      context: ./bgp-mcp/server
+      dockerfile: Dockerfile
+    container_name: bgp-app
+    profiles: ["local"]
+    ports:
+      - "8080:8080"
+      - "8001:8001"
+    env_file:
+      - ./bgp-mcp/.env
+    environment:
+      OLLAMA_HOST: host.docker.internal
+      OLLAMA_PORT: 11434
+    volumes:
+      - ./:/workspace:cached
+      - ./bgp-mcp/server:/app:cached
+    command: ["python", "main.py"]
+    restart: unless-stopped
+    networks:
+      - bgp-network
+
+networks:
+  bgp-network:
+    external: true
+    name: bgp-network
+
+volumes:
+  clickhouse-data:
+  clickhouse-logs:
