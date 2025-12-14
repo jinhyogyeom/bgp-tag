@@ -1,0 +1,23 @@
+<script>
+    var BGPLAY_PROJECT_URL = "https://bgplay.massimocandela.com/bgplay/";
+</script>
+<script src="https://bgplay.massimocandela.com/bgplay/lib/require.js"></script>
+<script src="https://bgplay.massimocandela.com/bgplay/widget/bgplayjs-main-widget.js"></script>
+
+<div id="bgplay"></div>
+
+<script>
+    BGPlayWidget(
+            'BGPlay', // Version type (classic)
+            'bgplay',  // DOM element ID to populate
+            {
+                width: 1100,
+                height: 800
+            }, {
+                "resource": "193.0.0.0/21", // Comma-separated resources to monitor
+                "starttime": 1709251200,  // 2024-03-01 00:00:00 UTC
+                "endtime": 1710460800,    // 2024-03-15 00:00:00 UTC
+                "rrcs": "1", // A list of Route Collectors
+                "ignoreReannouncements": true,
+             });
+</script>
