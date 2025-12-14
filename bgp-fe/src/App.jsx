@@ -1,53 +1,21 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import './App.css'
 
 function App() {
   const [isScriptLoaded, setIsScriptLoaded] = useState(false)
   const bgplayRef = useRef(null)
+  const [messages, setMessages] = useState([])
+  const [inputMessage, setInputMessage] = useState('')
+  const [chatHistory, setChatHistory] = useState([
+    { id: 1, title: 'BGP 분석 세션 1', lastMessage: '193.0.0.0/21 분석 요청', timestamp: '2024-03-01' },
+    { id: 2, title: 'BGP 분석 세션 2', lastMessage: 'AS3333 라우팅 분석', timestamp: '2024-03-02' }
+  ])
+  const [selectedChat, setSelectedChat] = useState(null)
 
-  // BGPlay 파라미터 상태
-  const [params, setParams] = useState({
-    resource: '193.0.0.0/21',
-    starttime: '',
-    endtime: '',
-    rrcs: '',
-    ignoreReannouncements: false
-  })
-
-  // BGPlay 위젯 옵션
-  const [options, setOptions] = useState({
-    width: 1100,
-    height: 800
-  })
-
-  // BGPlay 스크립트 로드
-  useEffect(() => {
-    const script = document.createElement('script')
-    script.src = 'https://bgplay.massimocandela.com/bgplay/widget/bgplayjs-main-widget.js'
-    script.async = true
-    script.onload = () => setIsScriptLoaded(true)
-    document.body.appendChild(script)
-  }, [])
-
-  // 파라미터 변경 핸들러
-  const handleParamChange = (key, value) => {
-    setParams(prev => ({ ...prev, [key]: value }))
-  }
-
-  // 옵션 변경 핸들러
-  const handleOptionChange = (key, value) => {
-    setOptions(prev => ({ ...prev, [key]: value }))
-  }
-
-  // BGPlay 로드
-  const loadBGPlay = () => {
-    if (!isScriptLoaded) {
-      alert('BGPlay 스크립트 로딩 중입니다.')
-      return
-    }
-
-    if (!params.resource.trim()) {
-      alert('Resource를 입력해주세요.')
+  // BGPlay 로드 함수
+  const loadBGPlay = useCallback((params) => {
+    if (!isScriptLoaded && !window.BGPlayWidget) {
+      setTimeout(() => loadBGPlay(params), 100)
       return
     }
 
@@ -56,119 +24,163 @@ function App() {
       bgplayRef.current.innerHTML = ''
     }
 
-    // 파라미터 객체 구성 (빈 값 제외)
-    const bgplayParams = {
-      resource: params.resource.trim()
+    // BGPlay 위젯 초기화 (index.html 코드 그대로)
+    if (window.BGPlayWidget) {
+      window.BGPlayWidget(
+        'BGPlay', // Version type (classic)
+        'bgplay',  // DOM element ID to populate
+        {
+          width: 1100,
+          height: 800
+        },
+        params
+      )
+    }
+  }, [isScriptLoaded])
+
+  // BGPlay 스크립트 로드
+  useEffect(() => {
+    // BGPLAY_PROJECT_URL 설정
+    window.BGPLAY_PROJECT_URL = "https://bgplay.massimocandela.com/bgplay/";
+    
+    // require.js 로드
+    const requireScript = document.createElement('script')
+    requireScript.src = 'https://bgplay.massimocandela.com/bgplay/lib/require.js'
+    requireScript.async = true
+    
+    // BGPlay 위젯 스크립트 로드
+    const bgplayScript = document.createElement('script')
+    bgplayScript.src = 'https://bgplay.massimocandela.com/bgplay/widget/bgplayjs-main-widget.js'
+    bgplayScript.async = true
+    
+    requireScript.onload = () => {
+      bgplayScript.onload = () => {
+        setIsScriptLoaded(true)
+        // 초기 BGPlay 로드
+        loadBGPlay({
+          resource: "193.0.0.0/21",
+          starttime: 1709251200,
+          endtime: 1710460800,
+          rrcs: "1",
+          ignoreReannouncements: true
+        })
+      }
+      document.body.appendChild(bgplayScript)
+    }
+    
+    document.body.appendChild(requireScript)
+  }, [loadBGPlay])
+
+  // 메시지 전송
+  const handleSendMessage = () => {
+    if (!inputMessage.trim()) return
+
+    const newMessage = {
+      id: messages.length + 1,
+      text: inputMessage,
+      sender: 'user',
+      timestamp: new Date().toLocaleTimeString()
     }
 
-    if (params.starttime) {
-      bgplayParams.starttime = Math.floor(new Date(params.starttime).getTime() / 1000)
-    }
-    if (params.endtime) {
-      bgplayParams.endtime = Math.floor(new Date(params.endtime).getTime() / 1000)
-    }
-    if (params.rrcs.trim()) {
-      bgplayParams.rrcs = params.rrcs.trim()
-    }
-    if (params.ignoreReannouncements) {
-      bgplayParams.ignoreReannouncements = true
-    }
+    setMessages([...messages, newMessage])
+    setInputMessage('')
 
-    // BGPlay 위젯 초기화
-    window.BGPlayWidget(
-      'BGPlay',   // Version type (classic)
-      'bgplay',   // DOM element ID to populate
-      {
-        width: options.width,
-        height: options.height
-      },
-      bgplayParams
-    )
+    // BGPlay 관련 키워드 감지
+    if (inputMessage.toLowerCase().includes('bgplay') || 
+        inputMessage.toLowerCase().includes('bgp') ||
+        inputMessage.match(/\d+\.\d+\.\d+\.\d+\/\d+/)) {
+      // BGPlay 파라미터 추출 (간단한 예시)
+      const ipMatch = inputMessage.match(/(\d+\.\d+\.\d+\.\d+\/\d+)/)
+      if (ipMatch) {
+        loadBGPlay({
+          resource: ipMatch[1],
+          starttime: 1709251200,
+          endtime: 1710460800,
+          rrcs: "1",
+          ignoreReannouncements: true
+        })
+      }
+    }
+  }
 
-    console.log('BGPlay 로드:', { options, params: bgplayParams })
+  // Enter 키 처리
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSendMessage()
+    }
   }
 
   return (
-    <div className="app">
-      <h1>BGPlay 연습 프로젝트</h1>
-
-      <div className="controls">
-        <fieldset>
-          <legend>Widget Options</legend>
-          <div className="field">
-            <label>Width</label>
-            <input
-              type="number"
-              value={options.width}
-              onChange={(e) => handleOptionChange('width', Number(e.target.value))}
-            />
-          </div>
-          <div className="field">
-            <label>Height</label>
-            <input
-              type="number"
-              value={options.height}
-              onChange={(e) => handleOptionChange('height', Number(e.target.value))}
-            />
-          </div>
-        </fieldset>
-
-        <fieldset>
-          <legend>BGPlay Parameters</legend>
-          <div className="field">
-            <label>Resource *</label>
-            <input
-              type="text"
-              value={params.resource}
-              onChange={(e) => handleParamChange('resource', e.target.value)}
-              placeholder="예: 193.0.0.0/21 또는 AS3333"
-            />
-            <small>Comma-separated resources to monitor</small>
-          </div>
-          <div className="field">
-            <label>Start Time</label>
-            <input
-              type="datetime-local"
-              value={params.starttime}
-              onChange={(e) => handleParamChange('starttime', e.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label>End Time</label>
-            <input
-              type="datetime-local"
-              value={params.endtime}
-              onChange={(e) => handleParamChange('endtime', e.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label>RRCs</label>
-            <input
-              type="text"
-              value={params.rrcs}
-              onChange={(e) => handleParamChange('rrcs', e.target.value)}
-              placeholder="예: 1,2,3,4"
-            />
-            <small>A list of Route Collectors</small>
-          </div>
-          <div className="field checkbox">
-            <label>
-              <input
-                type="checkbox"
-                checked={params.ignoreReannouncements}
-                onChange={(e) => handleParamChange('ignoreReannouncements', e.target.checked)}
-              />
-              Ignore Reannouncements
-            </label>
-          </div>
-        </fieldset>
-
-        <button onClick={loadBGPlay} disabled={!isScriptLoaded}>
-          {isScriptLoaded ? 'BGPlay 로드' : '스크립트 로딩...'}
-        </button>
+    <div className="app-container">
+      {/* 좌측: 채팅방 메모리 */}
+      <div className="sidebar">
+        <div className="sidebar-header">
+          <h2>채팅 기록</h2>
+          <button className="new-chat-btn">+ 새 채팅</button>
+        </div>
+        <div className="chat-list">
+          {chatHistory.map(chat => (
+            <div 
+              key={chat.id} 
+              className={`chat-item ${selectedChat === chat.id ? 'active' : ''}`}
+              onClick={() => setSelectedChat(chat.id)}
+            >
+              <div className="chat-title">{chat.title}</div>
+              <div className="chat-preview">{chat.lastMessage}</div>
+              <div className="chat-timestamp">{chat.timestamp}</div>
+            </div>
+          ))}
+        </div>
       </div>
 
-      <div id="bgplay" ref={bgplayRef}></div>
+      {/* 중앙: 채팅 */}
+      <div className="chat-area">
+        <div className="chat-header">
+          <h3>BGP 분석 어시스턴트</h3>
+        </div>
+        <div className="messages-container">
+          {messages.length === 0 ? (
+            <div className="empty-state">
+              <p>BGP 분석을 시작하세요. 예: "193.0.0.0/21에 대한 BGPlay를 보여줘"</p>
+            </div>
+          ) : (
+            messages.map(msg => (
+              <div key={msg.id} className={`message ${msg.sender}`}>
+                <div className="message-content">{msg.text}</div>
+                <div className="message-time">{msg.timestamp}</div>
+              </div>
+            ))
+          )}
+        </div>
+        <div className="chat-input-container">
+          <textarea
+            className="chat-input"
+            value={inputMessage}
+            onChange={(e) => setInputMessage(e.target.value)}
+            onKeyPress={handleKeyPress}
+            placeholder="메시지를 입력하세요..."
+            rows="1"
+          />
+          <button 
+            className="send-button"
+            onClick={handleSendMessage}
+            disabled={!inputMessage.trim()}
+          >
+            전송
+          </button>
+        </div>
+      </div>
+
+      {/* 우측: 시각화 영역 */}
+      <div className="visualization-area">
+        <div className="visualization-header">
+          <h3>시각화</h3>
+        </div>
+        <div className="visualization-content">
+          <div id="bgplay" ref={bgplayRef}></div>
+        </div>
+      </div>
     </div>
   )
 }
